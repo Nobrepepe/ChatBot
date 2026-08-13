@@ -1,0 +1,33 @@
+# Local Python environment and generated files
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+.claude/
+.agents/
+.codex/
+
+# User-created app data (may include API keys, chats, notes, and settings)
+data/
+storage/
+
+# User-imported world, character, and scene artwork
+assets/worlds/
+
+# Private development notes
+chatbot_app
+
+# Editor and operating-system files
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

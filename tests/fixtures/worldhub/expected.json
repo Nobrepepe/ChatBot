@@ -1,0 +1,18 @@
+{
+  "appType": "chat-bot.cast",
+  "contractId": "1f5ee944-3d13-422e-b66a-4d7083d0a8eb",
+  "contractVersion": 1,
+  "libraryId": "6267a982-7c38-4a03-8ba8-51712aeca5a6",
+  "productionId": "80faa1f7-3a91-4a96-aa14-6cf162d0d1fe",
+  "publicationV1": "865563f0-c891-45f2-957c-444155a64311",
+  "publicationV2": "067a9060-ac5a-4fbb-beb1-a37d4e646cb0",
+  "worldId": "397995bc-6b04-4acb-a602-fbd2eae31d3d",
+  "characterIds": [
+    "7a712e3f-6129-49ca-9322-0065ac81a721",
+    "f45a5cc5-b27b-4b65-9f73-56d2824c8b22"
+  ],
+  "renamedCharacterId": "7a712e3f-6129-49ca-9322-0065ac81a721",
+  "retiredCharacterIds": [
+    "f45a5cc5-b27b-4b65-9f73-56d2824c8b22"
+  ]
+}

@@ -17,11 +17,15 @@ def character_view(page: ft.Page, world_id: int, character_id: int | None) -> ft
     world=repo.get_world(world_id); character=repo.get_character(character_id) if character_id else Character(world_id=world_id)
     if not world or (character_id and not character):raise ValueError("Character not found")
     is_new=character.id is None; state={"section":0}
+    hub_managed=bool(getattr(character,"hub_id",None))
     name=th.UnderlinedField("Name",character.name);nick=th.UnderlinedField("Nicknames",character.nicknames)
     age=th.UnderlinedField("Age",character.age);role=th.UnderlinedField("Role",character.role)
     summary=th.UnderlinedField("Summary",character.summary,multiline=True,lines=2,max_lines=2)
     fields={key:th.UnderlinedField(label,getattr(character,key),multiline=True,lines=5,max_lines=5)
             for label,key in SECTIONS if key!="sprites"}
+    if hub_managed:
+        for control in (name,nick,age,role,summary,*fields.values()):
+            control.read_only=True
     selected_host=ft.Container()
 
     def profile_values():return {key:fields[key].value.strip() for _,key in SECTIONS if key!="sprites"}
@@ -89,7 +93,7 @@ def character_view(page: ft.Page, world_id: int, character_id: int | None) -> ft
         existing=repo.list_character_sprites(character.id) if character.id else []
         rows=[]
         for s in existing:rows.extend([ft.Row([th.masked_art(s.image_path,52,66),th.ui_text(f"{s.name}  {s.call_sign}",color=th.TEXT_1),ft.Container(expand=True),
-            th.secondary_action("Edit",lambda e,x=s:sprite_editor(x)),th.destructive_action("Delete",lambda e,x=s:(repo.delete_character_sprite(x.id,character.id),sprite_editor()))]),th.rule(.62)])
+            *([] if hub_managed else [th.secondary_action("Edit",lambda e,x=s:sprite_editor(x)),th.destructive_action("Delete",lambda e,x=s:(repo.delete_character_sprite(x.id,character.id),sprite_editor()))])]),th.rule(.62)])
         th.overlay(page,"Give the model another expression.",ft.Row([ft.Column([preview,th.secondary_action("Import sprite art",pick)],spacing=10),ft.Container(width=50),
             ft.Column([sname,call,ft.Container(height=8),*rows],expand=True,spacing=12)],vertical_alignment=ft.CrossAxisAlignment.START),
             [th.text_action("Save the sprite →",persist)],"Sprites")
@@ -115,9 +119,11 @@ def character_view(page: ft.Page, world_id: int, character_id: int | None) -> ft
         ft.Container(height=14),summary,ft.Container(height=18),th.rule(.76),ft.Container(height=18),
         ft.Row([th.eyebrow("The profile"),th.caption(f"{count} written, {len(missing)} empty.")],spacing=14),
         ft.Container(height=15),path_host,ft.Container(height=16),selected_host,ft.Container(expand=True),
-        ft.Row([th.text_action("Save the profile →",save,size=30),th.secondary_action("Import a portrait",lambda e:import_image("portrait")),
+        (th.caption("This character comes from a World Hub publication and is read-only here. "
+                    "Updates arrive through Settings → World Hub content.") if hub_managed else
+         ft.Row([th.text_action("Save the profile →",save,size=30),th.secondary_action("Import a portrait",lambda e:import_image("portrait")),
             th.secondary_action("Import a shelf image",lambda e:import_image("tile")),ft.Container(expand=True),
-            *([] if is_new else [th.destructive_action(f"Delete {character.name}",remove)])])],expand=True,spacing=0,padding=0)
+            *([] if is_new else [th.destructive_action(f"Delete {character.name}",remove)])]))],expand=True,spacing=0,padding=0)
     body=(editor if th.compact(page) else ft.Row([ft.Container(width=350),editor],expand=True))
     return th.screen(page,f"/world/{world_id}/character/{character.id or 'new'}",body,
         back_route=f"/world/{world_id}/characters",back_label=world.name,

@@ -22,9 +22,33 @@ def _rows_to(cls, rows, extra=None):
 
 # ---------------------------------------------------------------- worlds
 
-def list_worlds() -> list[World]:
+ACTIVE_PUBLICATION_KEY = "worldhub_active_publication"
+
+
+def active_publication_id() -> str | None:
+    """The active World Hub publication, or None in legacy mode."""
     with get_conn() as conn:
-        rows = conn.execute("SELECT * FROM worlds ORDER BY name").fetchall()
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key=?", (ACTIVE_PUBLICATION_KEY,)
+        ).fetchone()
+    return row["value"] if row and row["value"] else None
+
+
+def _canon_filter(alias: str = "") -> tuple[str, tuple]:
+    """SQL fragment limiting canonical rows to the active content source."""
+    prefix = f"{alias}." if alias else ""
+    active = active_publication_id()
+    if active is None:
+        return f"{prefix}publication_id IS NULL", ()
+    return f"{prefix}publication_id = ?", (active,)
+
+
+def list_worlds() -> list[World]:
+    where, params = _canon_filter()
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM worlds WHERE {where} ORDER BY name", params
+        ).fetchall()
     return _rows_to(World, rows)
 
 
@@ -72,6 +96,9 @@ LEFT JOIN character_images ci
 
 
 def list_characters(world_id: int) -> list[Character]:
+    # A world's characters share its content source, so no extra filter
+    # is needed beyond the world itself; scenes keep resolving their own
+    # (possibly older-publication) rows by id.
     with get_conn() as conn:
         rows = conn.execute(
             _CHAR_SELECT + " WHERE c.world_id=? ORDER BY c.name", (world_id,)
@@ -227,11 +254,13 @@ def save_scene(s: Scene) -> int:
             cur = conn.execute(
                 """INSERT INTO scenes
                    (world_id, location_id, title, premise, tone, time_of_day,
-                    relationship_status, mode, summary, narrator_enabled, persona_id)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    relationship_status, mode, summary, narrator_enabled, persona_id,
+                    publication_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (s.world_id, s.location_id, s.title, s.premise, s.tone,
                  s.time_of_day, s.relationship_status, s.mode, s.summary,
-                 int(s.narrator_enabled), s.persona_id),
+                 int(s.narrator_enabled), s.persona_id,
+                 s.publication_id or active_publication_id()),
             )
             scene_id = cur.lastrowid
         else:

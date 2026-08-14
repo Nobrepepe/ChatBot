@@ -8,6 +8,103 @@ from ..providers.openai_compat import get_provider
 from . import theme as th
 
 
+def _worldhub_section(page: ft.Page, rerender) -> ft.Control:
+    """World Hub content: install, link, preview, activate, roll back."""
+    from app.worldhub import consumer_service as hub
+
+    status = hub.status()
+    if status["hub_mode"]:
+        receipt = status["receipt"] or {}
+        summary = (f"Hub mode — “{receipt.get('productionName','?')}” revision "
+                   f"{receipt.get('productionRevision','?')}, publication "
+                   f"{str(status['publication_id'])[:8]}…, imported "
+                   f"{str(receipt.get('importedAt',''))[:10]}.")
+    else:
+        summary = ("Legacy mode — worlds and characters are authored in this app. "
+                   "Install a World Hub publication to make the Hub the canon source.")
+    linked = status["linked_folder"] or "No production folder linked."
+
+    def show_preview(staged):
+        preview = hub.preview(staged)
+        lines = []
+        if preview.already_active: lines.append("This publication is already active.")
+        if preview.added_worlds: lines.append("Worlds added: " + ", ".join(preview.added_worlds))
+        if preview.added_characters: lines.append("Characters added: " + ", ".join(preview.added_characters))
+        if preview.updated_characters: lines.append("Characters updated: " + ", ".join(preview.updated_characters))
+        if preview.retired_characters:
+            lines.append("Characters retiring (old conversations keep them): " + ", ".join(preview.retired_characters))
+        if preview.lore_documents: lines.append(f"{preview.lore_documents} lore document(s) included.")
+        if preview.pinned_scenes:
+            lines.append(f"{preview.pinned_scenes} existing conversation(s) stay pinned to the canon they began with.")
+        if not lines: lines.append("No visible content changes.")
+
+        def do_activate(e):
+            try: hub.activate(staged)
+            except Exception as error:
+                th.snack(page, str(error), True); return
+            if page.overlay: page.overlay.pop()
+            th.snack(page, "The publication is now active. New conversations use it.")
+            rerender(); page.update()
+
+        def cancel(e):
+            staged.cleanup()
+            if page.overlay: page.overlay.pop()
+            page.update()
+
+        th.overlay(page, f"Activate “{preview.production_name}”?",
+            ft.Column([th.body(line) for line in lines] +
+                      [th.caption("Scenes, messages, memories, personas, and notes are never touched. "
+                                  "A failed import changes nothing.")], spacing=10),
+            [th.text_action("Activate →", do_activate), th.secondary_action("Cancel", cancel)],
+            "World Hub")
+
+    def install_zip(e):
+        def result(ev):
+            if not ev.files: return
+            try: staged = hub.stage_zip(ev.files[0].path)
+            except Exception as error:
+                th.snack(page, str(error), True); return
+            show_preview(staged)
+        picker = ft.FilePicker(on_result=result); page.overlay.append(picker); page.update()
+        picker.pick_files(allow_multiple=False, allowed_extensions=["zip"])
+
+    def link_folder(e):
+        def result(ev):
+            if not ev.path: return
+            try: hub.link_folder(ev.path)
+            except Exception as error:
+                th.snack(page, str(error), True); return
+            th.snack(page, "Production folder linked."); rerender()
+        picker = ft.FilePicker(on_result=result); page.overlay.append(picker); page.update()
+        picker.get_directory_path()
+
+    def check_update(e):
+        try: staged = hub.stage_linked_folder()
+        except Exception as error:
+            th.snack(page, str(error), True); return
+        show_preview(staged)
+
+    def roll_back(e):
+        try: hub.rollback()
+        except Exception as error:
+            th.snack(page, str(error), True); return
+        th.snack(page, "Rolled back to the previous publication."); rerender()
+
+    actions = [th.secondary_action("Install publication ZIP →", install_zip),
+               th.secondary_action("Link production folder →", link_folder)]
+    if status["linked_folder"]:
+        actions.append(th.secondary_action("Check for update →", check_update))
+    if status["previous_publication_id"]:
+        actions.append(th.secondary_action("Roll back", roll_back))
+
+    return ft.Column([th.eyebrow("World Hub content"), ft.Container(height=12),
+        th.body(summary), ft.Container(height=6), th.caption(f"Linked folder: {linked}"),
+        ft.Container(height=18), ft.Row(actions, spacing=22, wrap=True),
+        ft.Container(height=12),
+        th.caption("The publication is copied into this app's data, so everything keeps "
+                   "working when the Hub library is unavailable.")], spacing=0)
+
+
 def settings_view(page: ft.Page) -> ft.View:
     saved = repo.get_settings()
     state = {"section": "Endpoint", "latency": None, "models": [], "connected": False}
@@ -110,6 +207,8 @@ def settings_view(page: ft.Page) -> ft.View:
                         "Streaming" if streaming else "Complete replies", choose_stream, neutral=True),
                     ft.Container(height=12), th.body("Replies appear as they arrive." if streaming else "Replies appear only when complete.")],
                     expand=True, spacing=0)])
+        elif state["section"] == "World Hub":
+            content = _worldhub_section(page, render_section)
         else:
             content = ft.Row([ft.Column([th.eyebrow("How scenes are shown"), ft.Container(height=16),
                 th.text_tabs(["Rolling chat", "Visual novel"],
@@ -127,7 +226,7 @@ def settings_view(page: ft.Page) -> ft.View:
     prose(); render_section()
     body = ft.Column([th.eyebrow("Settings"), ft.Container(height=10), headline,
         ft.Container(height=10), subline, ft.Container(height=28),
-        th.text_tabs(["Endpoint", "Generation", "Appearance"], state["section"], choose_section),
+        th.text_tabs(["Endpoint", "Generation", "Appearance", "World Hub"], state["section"], choose_section),
         ft.Container(height=28), section_host, th.rule(.76), ft.Container(height=14),
         ft.Row([th.secondary_action("Save settings", lambda e: save()),
                 ft.Container(expand=True), th.caption("Nothing changes the model until the next request.")])],

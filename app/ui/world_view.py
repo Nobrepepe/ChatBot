@@ -13,6 +13,7 @@ def world_view(page: ft.Page, world_id: int | None, initial_tab: str = "world") 
     world = repo.get_world(world_id) if world_id else World()
     if world_id and not world: raise ValueError("World not found")
     is_new = world.id is None
+    hub_managed = bool(getattr(world, "hub_id", None))
     mapped = {"world":"World", "characters":"Characters", "sessions":"Sessions",
               "lorebook":"Lorebook", "notes-list":"Notes"}
     state = {"tab": mapped.get(initial_tab, "World"), "detail": "Identity"}
@@ -23,6 +24,9 @@ def world_view(page: ft.Page, world_id: int | None, initial_tab: str = "world") 
     summary = th.UnderlinedField("Short summary", world.summary, multiline=True, lines=3)
     setting = th.UnderlinedField("Setting description", world.setting_description, multiline=True, lines=6)
     style = th.UnderlinedField("Style guide", world.style_guide, multiline=True, lines=6)
+    if hub_managed:
+        for field in (name, genre, tone, summary, setting, style):
+            field.read_only = True
 
     def save_world(e=None):
         if not name.value.strip(): th.snack(page, "A world needs a name.", True); return
@@ -65,16 +69,18 @@ def world_view(page: ft.Page, world_id: int | None, initial_tab: str = "world") 
     def art_block(label, path, action, kind):
         return ft.Column([th.eyebrow(label), ft.Container(height=10),
             th.masked_art(path, 470, 264, hatch_caption="no art"), ft.Container(height=10),
-            th.secondary_action(action, lambda e: pick_art(kind))], spacing=0, expand=True)
+            *([] if hub_managed else [th.secondary_action(action, lambda e: pick_art(kind))])], spacing=0, expand=True)
 
     def details_tab():
         return ft.Column([th.text_tabs(["Identity","Setting","Art"], state["detail"],
             lambda x: (state.__setitem__("detail", x), render())), ft.Container(height=24),
             detail_content(), ft.Container(expand=True), th.rule(.74), ft.Container(height=18),
-            ft.Row([th.text_action("Save the world →", save_world, size=30), ft.Container(expand=True),
+            (th.caption("This world comes from a World Hub publication and is read-only here. "
+                        "Updates arrive through Settings → World Hub content.") if hub_managed else
+             ft.Row([th.text_action("Save the world →", save_world, size=30), ft.Container(expand=True),
                 *([] if is_new else [th.destructive_action(f"Delete {world.name}", lambda e: confirm_delete(
                     f"Delete {world.name}", "Its characters, scenes, chats, lore and memories will be removed.",
-                    lambda: (repo.delete_world(world.id), page.go("/"))))])])], expand=True, spacing=0)
+                    lambda: (repo.delete_world(world.id), page.go("/"))))])]))], expand=True, spacing=0)
 
     def characters_tab():
         chars = repo.list_characters(world.id) if world.id else []
@@ -149,13 +155,13 @@ def world_view(page: ft.Page, world_id: int | None, initial_tab: str = "world") 
         for i,item in enumerate(entries):
             rows.extend([ft.Container(ft.Row([ft.Column([th.display(item.title or "Untitled",22),
                 th.caption("Always included" if item.always_include else f"Triggered by {item.keywords or 'no keywords'}")], spacing=3, expand=True),
-                th.secondary_action("Edit", lambda e,x=item:lore_editor(x)),
+                *([] if hub_managed else [th.secondary_action("Edit", lambda e,x=item:lore_editor(x)),
                 th.destructive_action("Delete", lambda e,x=item:confirm_delete("Delete this lore entry",
-                    "It will stop appearing in future prompts.", lambda:(repo.delete_lore_entry(x.id),render())))], spacing=24),
+                    "It will stop appearing in future prompts.", lambda:(repo.delete_lore_entry(x.id),render())))])], spacing=24),
                 padding=ft.padding.symmetric(vertical=11)), th.rule(.58+i%4*.07)])
         if not rows: rows.append(th.body("Nothing is in the lorebook yet."))
         return ft.ListView([ft.Row([th.numeral(len(entries),46), th.body(f"entries; {always} always included and {len(entries)-always} waiting for keywords."),
-            ft.Container(expand=True), th.secondary_action("New lore entry →", lambda e:lore_editor())]),
+            ft.Container(expand=True), *([] if hub_managed else [th.secondary_action("New lore entry →", lambda e:lore_editor())])]),
             ft.Container(height=18), *rows], spacing=0, expand=True, padding=0)
 
     def notes_tab():

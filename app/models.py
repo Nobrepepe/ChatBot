@@ -15,6 +15,8 @@ class World:
     cover_image_path: str = ""
     session_background_path: str = ""
     created_at: str = ""
+    hub_id: str | None = None
+    publication_id: str | None = None
 
 
 @dataclass
@@ -36,6 +38,8 @@ class Character:
     created_at: str = ""
     portrait_path: str = ""  # joined from character_images (expression='neutral')
     tile_image_path: str = ""
+    hub_id: str | None = None
+    publication_id: str | None = None
 
 
 @dataclass
@@ -63,6 +67,7 @@ class Scene:
     persona_id: int | None = None
     created_at: str = ""
     updated_at: str = ""
+    publication_id: str | None = None
     character_ids: list[int] = field(default_factory=list)
 
 
@@ -96,6 +101,8 @@ class LoreEntry:
     content: str = ""
     keywords: str = ""  # comma-separated match terms
     always_include: bool = False
+    hub_id: str | None = None
+    publication_id: str | None = None
 
 
 @dataclass

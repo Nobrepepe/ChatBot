@@ -271,8 +271,25 @@ def chat_view(page: ft.Page, scene_id: int) -> ft.View:
         expand=True,spacing=0)
     main_row=(conversation if th.compact(page) else ft.Row([art_panel,conversation],expand=True,spacing=34,
                vertical_alignment=ft.CrossAxisAlignment.END))
+    def _pinned_notice():
+        from app import repository as _repo
+        active = _repo.active_publication_id()
+        pinned = getattr(ctx.scene, "publication_id", None)
+        if not active or not pinned or pinned == active:
+            return ft.Container(height=0)
+        def migrate(e):
+            from app.worldhub import consumer_service as hub_service
+            try: hub_service.migrate_scene(ctx.scene.id)
+            except Exception as error:
+                th.snack(page, str(error), True); return
+            th.snack(page, "The conversation now uses the current canon.")
+            page.go(f"/chat/{ctx.scene.id}")
+        return ft.Row([th.caption("This conversation is pinned to the canon it began with."),
+            th.secondary_action("Move it to the current canon →", migrate)], spacing=18)
+
     body=ft.Column([
         th.eyebrow(f"{ctx.world.name} · {ctx.scene.mode} · {', '.join(c.name for c in ctx.characters)}"),
+        _pinned_notice(),
         ft.Container(height=4),th.display(ctx.scene.title or ctx.scene.premise or "Untitled scene",36),
         ft.Container(height=10),tools,ft.Container(height=10),th.rule(.84),
         main_row,

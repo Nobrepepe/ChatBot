@@ -121,3 +121,28 @@ app/
   ui/theme.py            design tokens and responsive control factories
 scripts/mock_server.py   fake OpenAI-compatible endpoint for testing
 ```
+
+## World Hub content
+
+ChatBot can consume [World Hub](../WorldHub) publications (Package Protocol 1,
+Application Contract 1). The authoritative contract lives at
+`worldhub/application-contract.json`.
+
+- **Install** — Settings → World Hub → *Install publication ZIP →*, or link a
+  World Hub production folder (the one containing `current.json`) and use
+  *Check for update →*. Packages are validated completely in staging (safe
+  paths, manifest, embedded contract, checksums, references) before anything
+  changes; a rejected package changes nothing.
+- **Hub mode** — canonical worlds, characters, and lore become read-only Hub
+  content views; linked Hub Markdown replaces published lore entries.
+  Personas, scenes, memories, and private notes stay editable and local, and
+  are never written back to the Hub.
+- **Pinning** — every conversation is pinned to the publication that was
+  active when it began, so an update never changes character behavior
+  mid-story. Retired characters stay visible in their old conversations but
+  cannot start new ones. Each pinned conversation offers an explicit
+  *Move it to the current canon →* action.
+- **Rollback** — the previous publication is retained and can be reactivated
+  from Settings.
+- **Provenance** — installs are copied into `data/worldhub-content/` with a
+  receipt per publication, so the app works offline from its own cache.

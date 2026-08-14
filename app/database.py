@@ -236,6 +236,20 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
     },
 }
 
+# World Hub consumer columns. Canonical rows imported from a publication
+# carry the Hub entity UUID and the publication they came from; rows
+# authored locally keep NULLs (legacy mode). Scenes pin the publication
+# that was active when they began, so conversations never change canon
+# mid-story.
+for _table in ("worlds", "characters", "locations", "lore_entries"):
+    _MIGRATIONS.setdefault(_table, {}).update({
+        "hub_id": "TEXT",
+        "publication_id": "TEXT",
+    })
+_MIGRATIONS.setdefault("scenes", {}).update({
+    "publication_id": "TEXT",
+})
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     for table, columns in _MIGRATIONS.items():

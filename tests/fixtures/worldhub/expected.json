@@ -1,18 +1,18 @@
 {
   "appType": "chat-bot.cast",
-  "contractId": "1f5ee944-3d13-422e-b66a-4d7083d0a8eb",
+  "contractId": "4b551975-4102-4499-adfa-9e88d0866f0e",
   "contractVersion": 1,
-  "libraryId": "6267a982-7c38-4a03-8ba8-51712aeca5a6",
-  "productionId": "80faa1f7-3a91-4a96-aa14-6cf162d0d1fe",
-  "publicationV1": "865563f0-c891-45f2-957c-444155a64311",
-  "publicationV2": "067a9060-ac5a-4fbb-beb1-a37d4e646cb0",
-  "worldId": "397995bc-6b04-4acb-a602-fbd2eae31d3d",
+  "libraryId": "2961debc-b0bb-4721-a4f9-e352d8a7720b",
+  "productionId": "3aca4e8a-9ae7-4e97-9e35-fba2ae9ad9e3",
+  "publicationV1": "ac3e67d3-682e-4e86-ae99-a49e389c1c6d",
+  "publicationV2": "5acd826a-1e9d-403c-ac00-420ba2c2b42a",
+  "worldId": "c2629141-2e3c-4e4a-82d9-1d531c11fdb6",
   "characterIds": [
-    "7a712e3f-6129-49ca-9322-0065ac81a721",
-    "f45a5cc5-b27b-4b65-9f73-56d2824c8b22"
+    "4af2ecb9-d09f-4020-96d7-f7a9013338d7",
+    "67028abc-de5f-4df8-804d-48815a2d53c7"
   ],
-  "renamedCharacterId": "7a712e3f-6129-49ca-9322-0065ac81a721",
+  "renamedCharacterId": "4af2ecb9-d09f-4020-96d7-f7a9013338d7",
   "retiredCharacterIds": [
-    "f45a5cc5-b27b-4b65-9f73-56d2824c8b22"
+    "67028abc-de5f-4df8-804d-48815a2d53c7"
   ]
 }

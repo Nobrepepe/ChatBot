@@ -397,6 +397,16 @@ function deriveLoreKeywords(title: string, entityNames: string[]): string[] {
   return [...keywords]
 }
 
+/**
+ * Recipe preference order per asset slot. The current contract's recipe leads;
+ * the names it replaced follow, because rollback and pinned conversations
+ * re-import publications that were packaged under the older contract and their
+ * art must keep resolving.
+ */
+const WIDE_RECIPES = ['tile_16x9', 'landscape_16x9']
+const PORTRAIT_RECIPES = ['portrait_3x4', 'portrait_9x16']
+const TILE_RECIPES = ['tile_16x9', 'square', 'thumbnail_square']
+
 function importContent(db: Database, pkg: PackageInfo, publicationId: string, mediaDir: string): void {
   const entities = entitiesById(pkg)
   const content = pkg.content
@@ -431,8 +441,8 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
     const entity = entities.get(hubWorldId)!
     const profile = worldProfiles.get(hubWorldId) ?? {}
     const values = entityValues[hubWorldId] ?? {}
-    const cover = copyMedia(pkg, mediaDir, setAsset('cb_world_cover', hubWorldId), ['landscape_16x9'])
-    const background = copyMedia(pkg, mediaDir, setAsset('session_background', hubWorldId), ['landscape_16x9'])
+    const cover = copyMedia(pkg, mediaDir, setAsset('cb_world_cover', hubWorldId), WIDE_RECIPES)
+    const background = copyMedia(pkg, mediaDir, setAsset('session_background', hubWorldId), WIDE_RECIPES)
     const info = db
       .prepare(
         `INSERT INTO worlds (name, genre, tone, summary, setting_description, style_guide,
@@ -461,7 +471,7 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
     const values = entityValues[hubPlaceId] ?? {}
     const worldLocal = worldLocalIds.get(entity['worldId'])
     if (worldLocal === undefined) continue
-    const background = copyMedia(pkg, mediaDir, setAsset('location_background', hubPlaceId), ['landscape_16x9'])
+    const background = copyMedia(pkg, mediaDir, setAsset('location_background', hubPlaceId), WIDE_RECIPES)
     db.prepare(
       `INSERT INTO locations (world_id, name, description, background_path, mood_tags, hub_id, publication_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
@@ -484,7 +494,7 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
     if (worldLocal === undefined) {
       throw new PackageError("A character's world is not part of the package.")
     }
-    const tile = copyMedia(pkg, mediaDir, setAsset('tile', hubCharacterId), ['square', 'thumbnail_square'])
+    const tile = copyMedia(pkg, mediaDir, setAsset('tile', hubCharacterId), TILE_RECIPES)
 
     // The neutral sprite (or the profile portrait) becomes the portrait column;
     // every other expression becomes a character_sprites row with a bare call sign.
@@ -497,9 +507,9 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
     let portraitPath = ''
     const neutral = sprites.find((s) => s.expression === 'neutral')
     if (neutral) {
-      portraitPath = copyMedia(pkg, mediaDir, neutral.assetId, ['portrait_9x16'])
+      portraitPath = copyMedia(pkg, mediaDir, neutral.assetId, PORTRAIT_RECIPES)
     } else if (profile['portraitAssetId']) {
-      portraitPath = copyMedia(pkg, mediaDir, profile['portraitAssetId'], ['portrait_9x16', 'square'])
+      portraitPath = copyMedia(pkg, mediaDir, profile['portraitAssetId'], [...PORTRAIT_RECIPES, 'square'])
     }
 
     const info = db
@@ -534,7 +544,7 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
     let order = 0
     for (const sprite of sprites) {
       if (sprite.expression === 'neutral' || !sprite.expression) continue
-      const path = copyMedia(pkg, mediaDir, sprite.assetId, ['portrait_9x16'])
+      const path = copyMedia(pkg, mediaDir, sprite.assetId, PORTRAIT_RECIPES)
       if (!path) continue
       const callSign = sprite.expression.replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+/, '')
       if (!callSign) continue

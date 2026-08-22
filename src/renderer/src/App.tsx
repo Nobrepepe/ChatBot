@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { createHashRouter, RouterProvider } from 'react-router-dom'
+import { createHashRouter, RouterProvider, type RouteObject } from 'react-router-dom'
 import { useEffect } from 'react'
 import { OverlayProvider } from './components/overlay'
 import { SnackProvider } from './components/snack'
@@ -20,7 +20,8 @@ const queryClient = new QueryClient({
   }
 })
 
-const router = createHashRouter([
+/** The route table, exported so tests can mount screens through the real router. */
+export const routes: RouteObject[] = [
   { path: '/', element: <HomeScreen /> },
   { path: '/settings', element: <SettingsScreen /> },
   { path: '/personas', element: <PersonasScreen /> },
@@ -34,7 +35,9 @@ const router = createHashRouter([
   { path: '/world/:wid/scene/new', element: <SceneSetupScreen /> },
   { path: '/world/:wid/scene/new/:templateId', element: <SceneSetupScreen /> },
   { path: '/chat/:sceneId', element: <ChatScreen /> }
-])
+]
+
+const router = createHashRouter(routes)
 
 /** Applies reduce-motion and text-scale settings to the document root. */
 function useAccessibilitySettings(): void {

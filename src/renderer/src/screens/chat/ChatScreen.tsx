@@ -300,51 +300,67 @@ export default function ChatScreen(): React.JSX.Element {
     )
   }
 
+  /**
+   * Picking and confirming are separate steps, and the picker owns the
+   * selection: the overlay body is built once, so reading the screen's
+   * responder here would leave the confirm action naming a stale character.
+   */
+  function ResponderPicker({
+    initialId,
+    close
+  }: {
+    initialId: number | null
+    close: () => void
+  }): React.JSX.Element {
+    const [picked, setPicked] = useState<number | null>(initialId)
+    const chosenCharacter = cast.find((c) => c.id === picked) ?? cast[0]
+    return (
+      <div className="block">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 'var(--space-4)' }}>
+          {cast.map((c) => {
+            const chosen = chosenCharacter?.id === c.id
+            const art = c.tileImagePath || c.portraitPath
+            return (
+              <button
+                key={c.id}
+                type="button"
+                className="row-line"
+                style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}
+                onClick={() => setPicked(c.id)}
+              >
+                {art ? (
+                  <Art path={art} treatment="alpha" ghost={!chosen} style={{ width: '100%', aspectRatio: '16/9', objectFit: 'contain' }} />
+                ) : null}
+                <span className="row-title" style={{ fontSize: 'var(--size-title)' }}>{c.name}</span>
+                <span className="caption" style={chosen ? { color: 'var(--accent)' } : undefined}>
+                  {chosen ? 'responds next' : 'waiting'}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+        <div className="overlay-actions">
+          <TextAction
+            onClick={async () => {
+              const id = chosenCharacter?.id ?? null
+              setResponderId(id)
+              close()
+              await stream.start({ kind: 'reply', sceneId, responderId: id, respondToLatest: true })
+            }}
+            sub="They answer the previous reply directly, without a user turn."
+          >
+            Respond as {chosenCharacter?.name} →
+          </TextAction>
+        </div>
+      </div>
+    )
+  }
+
   function chooseResponder(): void {
     overlay.open({
       eyebrow: 'Cast',
       title: 'Who responds next?',
-      render: (close) => (
-        <div className="block">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 'var(--space-4)' }}>
-            {cast.map((c) => {
-              const chosen = (responder?.id ?? null) === c.id
-              const art = c.tileImagePath || c.portraitPath
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  className="row-line"
-                  style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}
-                  onClick={() => {
-                    setResponderId(c.id)
-                    close()
-                  }}
-                >
-                  {art ? (
-                    <Art path={art} treatment="alpha" ghost={!chosen} style={{ width: '100%', aspectRatio: '16/9', objectFit: 'contain' }} />
-                  ) : null}
-                  <span className="row-title" style={{ fontSize: 'var(--size-title)' }}>{c.name}</span>
-                  <span className="caption" style={chosen ? { color: 'var(--accent)' } : undefined}>
-                    {chosen ? 'responds next' : 'waiting'}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-          <div className="overlay-actions">
-            <TextAction
-              onClick={async () => {
-                close()
-                await stream.start({ kind: 'reply', sceneId, responderId: responder?.id, respondToLatest: true })
-              }}
-              sub="They answer the previous reply directly, without a user turn."
-            >
-              Respond as {responder?.name} →
-            </TextAction>
-          </div>
-        </div>
-      )
+      render: (close) => <ResponderPicker initialId={responder?.id ?? null} close={close} />
     })
   }
 

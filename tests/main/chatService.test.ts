@@ -5,6 +5,9 @@ import * as charactersRepo from '@main/db/repo/characters'
 import * as scenesRepo from '@main/db/repo/scenes'
 import * as messagesRepo from '@main/db/repo/messages'
 import * as memoriesRepo from '@main/db/repo/memories'
+import * as personasRepo from '@main/db/repo/personas'
+import * as loreRepo from '@main/db/repo/lore'
+import * as settingsRepo from '@main/db/repo/settings'
 import * as chat from '@main/services/chatService'
 
 // The provider is mocked; each test decides what the "model" answers.
@@ -99,8 +102,95 @@ describe('summarize', () => {
 })
 
 describe('impersonate', () => {
+  function withPersona(): void {
+    const personaId = personasRepo.savePersona({ name: 'Rui', description: 'A scribe.' })
+    scenesRepo.saveScene({
+      id: sceneId,
+      worldId: scenesRepo.getScene(sceneId)!.worldId,
+      title: 'The rooftop',
+      mode: 'roleplay',
+      personaId,
+      characterIds: [liraelId, morganaId]
+    })
+  }
+
   it('requires a persona', async () => {
     await expect(chat.impersonate(sceneId)).rejects.toThrow('Choose a persona in scene setup first.')
+  })
+
+  it('sends the reply prompt unchanged, with the OOC turn appended', async () => {
+    withPersona()
+    answerWith('I step closer.')
+    const reply = chat.build(sceneId)
+    await chat.impersonate(sceneId)
+
+    const sent = mockedStream.mock.calls[0]![0]
+    expect(sent.slice(0, reply.built.messages.length)).toEqual(reply.built.messages)
+    expect(sent.at(-1)!.content).toContain('the USER persona')
+  })
+
+  it('strips wire tags the reused prompt invites, so none reach the composer', async () => {
+    withPersona()
+    charactersRepo.saveCharacterSprite({
+      characterId: liraelId,
+      name: 'Sad',
+      callSign: 'sad',
+      imagePath: 'x.png'
+    })
+    answerWith('{Rui} [sad] I step closer.')
+    expect(await chat.impersonate(sceneId)).toBe('I step closer.')
+  })
+})
+
+describe('the lore budget', () => {
+  it('trims a long entry down to the configured budget', async () => {
+    const worldId = scenesRepo.getScene(sceneId)!.worldId
+    loreRepo.saveLoreEntry({
+      worldId,
+      title: 'Setting document',
+      content: 'x'.repeat(70_000),
+      alwaysInclude: true
+    })
+
+    settingsRepo.saveSettings({ loreBudget: '500' })
+    const trimmed = chat.build(sceneId).built.messages[0]!.content
+    expect(trimmed).toContain('…(trimmed to fit the lore budget)')
+    expect(trimmed.length).toBeLessThan(3000)
+
+    settingsRepo.saveSettings({ loreBudget: '0' })
+    expect(chat.build(sceneId).built.messages[0]!.content.length).toBeGreaterThan(70_000)
+  })
+})
+
+describe('stopping a one-shot', () => {
+  it('hands the caller\'s signal to the provider, so Stop reaches the request', async () => {
+    answerWith('A summary.')
+    const controller = new AbortController()
+    await chat.summarize(sceneId, controller.signal)
+    expect(mockedStream.mock.calls[0]![2]).toBe(controller.signal)
+
+    mockedStream.mockClear()
+    answerWith('- Morgana is afraid.')
+    await chat.suggestMemories(sceneId, controller.signal)
+    expect(mockedStream.mock.calls[0]![2]).toBe(controller.signal)
+  })
+
+  it('writes no summary when the generation is aborted', async () => {
+    mockedStream.mockImplementation(async function* () {
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' })
+      yield ''
+    })
+    await expect(chat.summarize(sceneId, new AbortController().signal)).rejects.toThrow('aborted')
+    expect(scenesRepo.getScene(sceneId)!.summary).toBe('')
+  })
+
+  it('saves no pending memories when the generation is aborted', async () => {
+    mockedStream.mockImplementation(async function* () {
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' })
+      yield ''
+    })
+    await expect(chat.suggestMemories(sceneId, new AbortController().signal)).rejects.toThrow('aborted')
+    expect(memoriesRepo.listMemories(morganaId, { status: 'pending' })).toHaveLength(0)
   })
 })
 

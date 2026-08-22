@@ -2,7 +2,7 @@
 
 import type { Character, Message, Persona, Scene } from '@shared/types'
 import type { ChatMessage } from '../providers/openaiCompat'
-import { systemText, type BuiltPrompt } from './promptBuilder'
+import type { BuiltPrompt } from './promptBuilder'
 
 /** Flattens a transcript with speaker labels from the structured columns. */
 function transcriptLines(characters: Character[], history: Message[]): string[] {
@@ -40,32 +40,40 @@ export function buildSummaryPrompt(
   ]
 }
 
+/** The OOC turn that flips the model from the character to the user persona. */
+export function impersonationInstruction(personaName: string, draft = ''): string {
+  let text =
+    '[OOC: Set the character aside for this one turn. Write one possible next ' +
+    `turn for ${personaName}, the USER persona, instead — not for any ` +
+    'character. Infer it from the persona description, the scene, and the ' +
+    'conversation above: what the persona says and, when natural, a brief ' +
+    'action in roleplay prose. Never decide major irreversible actions for the ' +
+    'user, and never write anyone else\'s turn. Output ONLY the suggested ' +
+    'turn: no explanation, no speaker label, no sprite call sign, no quotation ' +
+    'wrapper around the whole response, and no comment on this instruction.]'
+  if (draft.trim()) {
+    text += `\n\n[Unfinished draft to build on, as optional guidance:\n${draft.trim()}]`
+  }
+  return text
+}
+
+/**
+ * Impersonation reuses the reply prompt byte for byte and steers with a
+ * trailing OOC turn, the way a continuation does. Rewriting the system message
+ * to drop the character instructions would read better in isolation, but it
+ * changes token zero: a local server then has no usable prefix cache and
+ * reprocesses the whole context — tens of thousands of tokens — every time the
+ * user alternates between a reply and a suggestion.
+ */
 export function buildImpersonationPrompt(
   context: BuiltPrompt,
   persona: Persona,
   draft = ''
 ): ChatMessage[] {
-  const contextSections = context.sections.filter(
-    (s) => s.label !== 'System instructions' && s.label !== 'Custom system prompt'
-  )
-  const background = systemText(contextSections)
-  let system =
-    'You are helping the user roleplay as their persona. Write one possible ' +
-    `next turn for ${persona.name}, the USER persona—not for any character. ` +
-    'Infer a natural response from the persona description, scene context, and ' +
-    'conversation. Include what the persona says and, when natural, a brief ' +
-    'action in roleplay prose. Never decide major irreversible actions for the ' +
-    'user. Output only the suggested turn: no explanation, no speaker label, ' +
-    'no quotation wrapper around the whole response, and no sprite call sign.'
-  if (background) system += '\n\n' + background
-  const messages: ChatMessage[] = [{ role: 'system', content: system }]
-  messages.push(...context.messages.slice(1))
-  let request = "Suggest the user persona's next turn now."
-  if (draft.trim()) {
-    request += ` Use this unfinished draft as optional guidance:\n${draft.trim()}`
-  }
-  messages.push({ role: 'user', content: request })
-  return messages
+  return [
+    ...context.messages,
+    { role: 'user', content: impersonationInstruction(persona.name, draft) }
+  ]
 }
 
 export const CONTINUE_INSTRUCTION =

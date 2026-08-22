@@ -34,7 +34,8 @@ export default function SettingsScreen(): React.JSX.Element {
       ['Temperature', values.temperature],
       ['Top-p', values.topP],
       ['Max tokens', values.maxTokens],
-      ['History window', values.historyLimit]
+      ['History window', values.historyLimit],
+      ['Lore budget', values.loreBudget]
     ] as const) {
       if (Number.isNaN(Number(value))) {
         snack(`${label} needs a number.`, true)
@@ -114,6 +115,12 @@ export default function SettingsScreen(): React.JSX.Element {
           <Field label="History window" value={draft.historyLimit} onChange={set('historyLimit')} />
           <FadingBar fill={Number(draft.historyLimit) / 100 || 0} width={330} />
           <p className="caption">How many recent messages are sent with each request.</p>
+          <Field label="Lore budget" value={draft.loreBudget} onChange={set('loreBudget')} />
+          <FadingBar fill={Number(draft.loreBudget) / 20000 || 0} width={330} />
+          <p className="caption">
+            Characters of matched lore sent with each request. Long entries are trimmed to fit
+            rather than dropped. 0 sends every match, however long.
+          </p>
           <Rule end={58} />
           <Eyebrow>Replies</Eyebrow>
           <TextTabs

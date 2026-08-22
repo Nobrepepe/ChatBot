@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { act, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   installFakeApi,
@@ -308,6 +308,80 @@ describe('scene tools', () => {
     renderRoute('/chat/5')
     await userEvent.click(await screen.findByRole('button', { name: 'Suggest memories' }))
     expect(await screen.findByText('Nothing stood out as worth remembering.')).toBeInTheDocument()
+  })
+})
+
+describe('a one-shot generation in flight', () => {
+  beforeEach(() => {
+    seed({ messages: [makeMessage({ id: 100, sceneId: 5 })] })
+    api.store.personas = [
+      { id: 1, name: 'Kyzer', description: 'A wandering scribe.', createdAt: '2026-08-22T00:00:00.000Z' }
+    ]
+    api.store.scenes[0]!.personaId = 1
+  })
+
+  it('takes the Impersonate button off the table until it settles', async () => {
+    api.defer('chat:impersonate')
+    renderRoute('/chat/5')
+    await userEvent.click(await screen.findByRole('button', { name: 'Impersonate' }))
+
+    expect(await screen.findByText('drafting your turn')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Impersonate' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Summarize' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Suggest memories' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Send →' })).toBeDisabled()
+
+    await act(async () => api.release('chat:impersonate'))
+    expect(await screen.findByRole('button', { name: 'Impersonate' })).toBeEnabled()
+    expect(api.callsTo('chat:impersonate')).toHaveLength(1)
+    expect(composer()).toHaveValue('I step closer.')
+  })
+
+  it('never stacks a second prompt from a burst of clicks in one frame', async () => {
+    api.defer('chat:impersonate')
+    renderRoute('/chat/5')
+    const button = await screen.findByRole('button', { name: 'Impersonate' })
+    // Fired without awaiting between them, so React cannot swap the button out
+    // first: only the in-flight guard stands between this and five prompts.
+    await act(async () => {
+      for (let i = 0; i < 5; i++) fireEvent.click(button)
+    })
+
+    expect(api.callsTo('chat:impersonate')).toHaveLength(1)
+    await act(async () => api.release('chat:impersonate'))
+    expect(api.callsTo('chat:impersonate')).toHaveLength(1)
+  })
+
+  it('stops the generation from the composer', async () => {
+    api.defer('chat:impersonate')
+    renderRoute('/chat/5')
+    await userEvent.click(await screen.findByRole('button', { name: 'Impersonate' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Stop' }))
+
+    expect(api.callsTo('chat:cancelOneShot')).toContainEqual([5])
+    await act(async () => api.release('chat:impersonate'))
+  })
+
+  it('says nothing when a stopped generation comes back cancelled', async () => {
+    api.failNext('chat:impersonate', 'The request was stopped.', 'cancelled')
+    renderRoute('/chat/5')
+    await userEvent.type(await screen.findByPlaceholderText('Say something'), 'my own words')
+    await userEvent.click(screen.getByRole('button', { name: 'Impersonate' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Impersonate' })).toBeEnabled())
+    expect(screen.queryByText('The request was stopped.')).not.toBeInTheDocument()
+    expect(composer()).toHaveValue('my own words')
+  })
+
+  it('blocks the scene tools while a reply is streaming', async () => {
+    renderRoute('/chat/5')
+    await userEvent.type(await screen.findByPlaceholderText('Say something'), 'hello')
+    await userEvent.keyboard('{Enter}')
+    await chunk('She looks up.')
+
+    expect(screen.getByRole('button', { name: 'Summarize' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Impersonate' })).toBeDisabled()
+    await finish()
   })
 })
 

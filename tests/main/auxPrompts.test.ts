@@ -65,15 +65,31 @@ describe('buildImpersonationPrompt', () => {
     ]
   }
 
-  it('reuses context minus the system-instruction sections and replays history', () => {
+  it('leaves the reply prompt untouched so the server keeps its prefix cache', () => {
+    const messages = buildImpersonationPrompt(context, persona)
+    // Byte-for-byte the reply prompt: anything else changes token zero and
+    // costs a full reprocess of the context on every suggestion.
+    expect(messages.slice(0, context.messages.length)).toEqual(context.messages)
+    expect(messages).toHaveLength(context.messages.length + 1)
+  })
+
+  it('steers to the persona with a trailing OOC turn', () => {
+    const messages = buildImpersonationPrompt(context, persona)
+    const request = messages.at(-1)!
+    expect(request.role).toBe('user')
+    expect(request.content).toContain('next turn for Rui, the USER persona')
+    expect(request.content).toContain('no sprite call sign')
+  })
+
+  it('passes an unfinished draft along, trimmed, as optional guidance', () => {
     const messages = buildImpersonationPrompt(context, persona, ' half-typed ')
-    const system = messages[0]!.content
-    expect(system).toContain('next turn for Rui, the USER persona')
-    expect(system).toContain('## World\nWorld name: Eden')
-    expect(system).not.toContain('roleplay instructions')
-    expect(system).not.toContain('secret global prompt')
-    expect(messages[1]).toEqual({ role: 'user', content: 'Hello?' })
     expect(messages.at(-1)!.content).toContain('optional guidance:\nhalf-typed')
+  })
+
+  it('says nothing about a draft when the composer is empty', () => {
+    expect(buildImpersonationPrompt(context, persona, '   ').at(-1)!.content).not.toContain(
+      'Unfinished draft'
+    )
   })
 })
 

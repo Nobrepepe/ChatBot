@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildPrompt,
+  budgetLore,
   matchLore,
   spriteInstruction,
   MULTI_CHARACTER_RULES,
   NARRATOR_INSTRUCTION,
-  NO_NARRATOR_INSTRUCTION
+  NO_NARRATOR_INSTRUCTION,
+  type LoreMatch
 } from '@main/prompt/promptBuilder'
 import type { Character, LoreEntry, Memory, Message, Persona, Scene, World } from '@shared/types'
 
@@ -253,6 +255,50 @@ describe('buildPrompt', () => {
       label: 'Custom system prompt',
       content: 'Always answer in Portuguese.'
     })
+  })
+})
+
+describe('budgetLore', () => {
+  const long = (title: string, size: number, always = false): LoreMatch => ({
+    entry: { ...lore(1, title, [], always), content: 'x'.repeat(size) },
+    reason: always ? 'always included' : 'matched keyword "x"'
+  })
+
+  it('keeps everything that fits', () => {
+    const section = budgetLore([long('Short', 100), long('Also short', 100)], 6000)!
+    expect(section.content).toContain('### Short')
+    expect(section.content).toContain('### Also short')
+    expect(section.content).not.toContain('trimmed')
+  })
+
+  it('trims the entry that straddles the line instead of dropping it whole', () => {
+    const section = budgetLore([long('Setting document', 70_000)], 6000)!
+    expect(section.content).toContain('### Setting document')
+    expect(section.content).toContain('…(trimmed to fit the lore budget)')
+    expect(section.content.length).toBeLessThan(6200)
+  })
+
+  it('names what it left out so the model knows the entry exists', () => {
+    const section = budgetLore([long('Hoarder', 6000), long('Crowded out', 500)], 6000)!
+    expect(section.content).toContain('Left out to stay within the lore budget: Crowded out.')
+  })
+
+  it('spends the budget on always-include entries before keyword matches', () => {
+    const section = budgetLore([long('Keyword hit', 6000), long('Mandatory', 100, true)], 6000)!
+    expect(section.content).toContain('### Mandatory')
+    expect(section.content.indexOf('### Mandatory')).toBeLessThan(
+      section.content.indexOf('### Keyword hit')
+    )
+  })
+
+  it('keeps every match when the budget is 0', () => {
+    const section = budgetLore([long('Setting document', 70_000)], 0)!
+    expect(section.content).not.toContain('trimmed')
+    expect(section.content.length).toBeGreaterThan(70_000)
+  })
+
+  it('has no section to add when nothing matched', () => {
+    expect(budgetLore([], 6000)).toBeNull()
   })
 })
 

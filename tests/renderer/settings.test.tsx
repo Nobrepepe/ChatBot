@@ -63,6 +63,24 @@ describe('generation settings', () => {
     expect(api.callsTo('settings:save')).toHaveLength(0)
   })
 
+  it('saves the lore budget and refuses a non-numeric one', async () => {
+    renderRoute('/settings')
+    await userEvent.click(await screen.findByRole('tab', { name: 'Generation' }))
+    const loreBudget = await screen.findByLabelText('Lore budget')
+    await userEvent.clear(loreBudget)
+    await userEvent.type(loreBudget, 'lots')
+    await userEvent.click(screen.getByRole('button', { name: /Save settings/ }))
+    expect(await screen.findByText('Lore budget needs a number.')).toBeInTheDocument()
+    expect(api.callsTo('settings:save')).toHaveLength(0)
+
+    await userEvent.clear(loreBudget)
+    await userEvent.type(loreBudget, '2000')
+    await userEvent.click(screen.getByRole('button', { name: /Save settings/ }))
+    await waitFor(() => expect(api.callsTo('settings:save')).toHaveLength(1))
+    const [values] = api.callsTo('settings:save')[0] as [any]
+    expect(values.loreBudget).toBe('2000')
+  })
+
   it('saves valid values and says when they take effect', async () => {
     renderRoute('/settings')
     await userEvent.click(await screen.findByRole('tab', { name: 'Generation' }))

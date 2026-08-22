@@ -153,6 +153,50 @@ export function buildSceneSection(scene: Scene): string {
 
 export type LoreMatch = { entry: LoreEntry; reason: string }
 
+/** Characters of lore text one prompt may carry before entries are trimmed. */
+export const DEFAULT_LORE_BUDGET = 6000
+
+/**
+ * Lore is injected whole, so a single long document can crowd out everything
+ * else — a 70 KB setting document is ~18k tokens on its own, sent again with
+ * every message. Entries are taken in order, always-include ones first, until
+ * the budget runs out. The entry that straddles the line is trimmed rather
+ * than dropped, because a document's opening is usually its summary, and
+ * whatever did not fit is named so the model knows it exists and the prompt
+ * debug panel shows what happened. A budget of 0 keeps everything.
+ */
+export function budgetLore(matches: LoreMatch[], budget: number): PromptSection | null {
+  if (!matches.length) return null
+  const unlimited = !Number.isFinite(budget) || budget <= 0
+  const ordered = [
+    ...matches.filter((m) => m.entry.alwaysInclude),
+    ...matches.filter((m) => !m.entry.alwaysInclude)
+  ]
+
+  const parts: string[] = []
+  const omitted: string[] = []
+  let left = budget
+  for (const { entry, reason } of ordered) {
+    const head = `### ${entry.title} (${reason})`
+    const body = entry.content.trim()
+    if (unlimited || body.length <= left) {
+      parts.push(`${head}\n${body}`)
+      left -= body.length
+      continue
+    }
+    if (left <= 0) {
+      omitted.push(entry.title)
+      continue
+    }
+    parts.push(`${head}\n${body.slice(0, left).trimEnd()}\n…(trimmed to fit the lore budget)`)
+    left = 0
+  }
+  if (omitted.length) {
+    parts.push(`Left out to stay within the lore budget: ${omitted.join(', ')}.`)
+  }
+  return { label: 'Relevant lore', content: parts.join('\n\n') }
+}
+
 /** Always-include entries plus entries whose keywords appear in the premise,
  * title, or the last `recent` visible messages. Plain substring matching. */
 export function matchLore(
@@ -198,6 +242,8 @@ export interface BuildPromptInput {
   responder?: Character | null
   respondToLatest?: boolean
   systemPrompt?: string
+  /** Characters of lore text to allow; 0 keeps every matched entry. */
+  loreBudget?: number
 }
 
 export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
@@ -214,7 +260,8 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
     sprites = null,
     responder = null,
     respondToLatest = false,
-    systemPrompt = ''
+    systemPrompt = '',
+    loreBudget = DEFAULT_LORE_BUDGET
   } = input
 
   const sections: PromptSection[] = []
@@ -268,14 +315,8 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
     }
   }
 
-  if (loreMatches.length) {
-    sections.push({
-      label: 'Relevant lore',
-      content: loreMatches
-        .map(({ entry, reason }) => `### ${entry.title} (${reason})\n${entry.content}`)
-        .join('\n\n')
-    })
-  }
+  const loreSection = budgetLore(loreMatches, loreBudget)
+  if (loreSection) sections.push(loreSection)
 
   if (persona) {
     sections.push({

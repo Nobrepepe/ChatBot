@@ -227,6 +227,8 @@ export interface AppSettings {
   maxTokens: string
   streaming: string
   historyLimit: string
+  /** Characters of lore text sent per prompt; '0' sends every match. */
+  loreBudget: string
   displayMode: string
   systemPrompt: string
   reduceMotion: string
@@ -341,6 +343,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   maxTokens: '1024',
   streaming: '1',
   historyLimit: '30',
+  loreBudget: '6000',
   displayMode: 'chat',
   systemPrompt: '',
   reduceMotion: '0',

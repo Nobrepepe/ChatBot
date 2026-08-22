@@ -54,7 +54,11 @@ export interface FakeApi {
   done: (requestId: number) => void
   fail: (requestId: number, message: string) => void
   /** Force a channel to reject, to exercise error paths. */
-  failNext: (channel: string, message: string) => void
+  failNext: (channel: string, message: string, code?: string) => void
+  /** Hold every later call to a channel unanswered, to exercise in-flight UI. */
+  defer: (channel: string) => void
+  /** Answer everything defer() is holding and stop holding new calls. */
+  release: (channel: string) => void
   callsTo: (channel: string) => unknown[][]
 }
 
@@ -216,7 +220,9 @@ export function installFakeApi(seed: Partial<FakeStore> = {}): FakeApi {
   const calls: [string, ...unknown[]][] = []
   const listeners = new Set<(e: StreamEvent) => void>()
   const streams = new Map<number, ChatStartParams>()
-  const failures = new Map<string, string>()
+  const failures = new Map<string, { message: string; code: string }>()
+  const deferred = new Set<string>()
+  const gates = new Map<string, (() => void)[]>()
   let requestCounter = 0
 
   const api: FakeApi = {
@@ -228,7 +234,14 @@ export function installFakeApi(seed: Partial<FakeStore> = {}): FakeApi {
     chunk: (requestId, delta) => api.emit({ requestId, type: 'chunk', delta }),
     done: (requestId) => api.emit({ requestId, type: 'done' }),
     fail: (requestId, message) => api.emit({ requestId, type: 'error', message }),
-    failNext: (channel, message) => failures.set(channel, message),
+    failNext: (channel, message, code = 'error') => failures.set(channel, { message, code }),
+    defer: (channel) => deferred.add(channel),
+    release: (channel) => {
+      deferred.delete(channel)
+      const waiting = gates.get(channel) ?? []
+      gates.delete(channel)
+      for (const resume of waiting) resume()
+    },
     callsTo: (channel) => calls.filter(([c]) => c === channel).map(([, ...args]) => args)
   }
 
@@ -382,6 +395,7 @@ export function installFakeApi(seed: Partial<FakeStore> = {}): FakeApi {
       messages: [{ role: 'system', content: 'You are playing…' }]
     }),
     'chat:export': () => '/tmp/exports/scene_1.md',
+    'chat:cancelOneShot': () => undefined,
 
     'notes:list': (wid: number) => store.notes.filter((n) => n.worldId === wid),
     'notes:get': (nid: number) => byId(store.notes, nid),
@@ -459,10 +473,13 @@ export function installFakeApi(seed: Partial<FakeStore> = {}): FakeApi {
   const bridge: RendererApi = {
     invoke: async (channel: string, ...args: unknown[]): Promise<IpcResult<any>> => {
       calls.push([channel, ...args])
+      if (deferred.has(channel)) {
+        await new Promise<void>((resume) => gates.set(channel, [...(gates.get(channel) ?? []), resume]))
+      }
       const forced = failures.get(channel)
       if (forced) {
         failures.delete(channel)
-        return { ok: false, code: 'error', message: forced }
+        return { ok: false, code: forced.code, message: forced.message }
       }
       const handler = handlers[channel]
       if (!handler) return { ok: false, code: 'error', message: `No fake handler for ${channel}` }

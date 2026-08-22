@@ -7,7 +7,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Character, Memory, Persona, Scene, World } from '@shared/types'
-import { parseEmotion, parseSpeakerPrefix } from '@shared/wireFormat'
+import { parseEmotion, parseSpeakerPrefix, stripWirePrefixes } from '@shared/wireFormat'
 import { exportsDir } from '../paths'
 import * as scenesRepo from '../db/repo/scenes'
 import * as messagesRepo from '../db/repo/messages'
@@ -20,6 +20,7 @@ import * as settingsRepo from '../db/repo/settings'
 import {
   buildPrompt,
   matchLore,
+  DEFAULT_LORE_BUDGET,
   type BuiltPrompt,
   type LoreMatch
 } from '../prompt/promptBuilder'
@@ -54,6 +55,12 @@ export function loadContext(sceneId: number): ChatContext {
 function historyLimit(): number {
   const raw = Number(settingsRepo.getSettings().historyLimit)
   return Math.max(1, Number.isFinite(raw) ? Math.trunc(raw) : 30)
+}
+
+/** Characters of lore allowed per prompt; 0 means send every match. */
+function loreBudget(): number {
+  const raw = Number(settingsRepo.getSettings().loreBudget)
+  return Number.isFinite(raw) ? Math.max(0, Math.trunc(raw)) : DEFAULT_LORE_BUDGET
 }
 
 /** Emotion tags are on when any scene character has sprites (never in author mode). */
@@ -128,7 +135,8 @@ export function build(sceneId: number, options: BuildOptions = {}): BuildResult 
     sprites,
     responder: ctx.characters.length > 1 ? responder : null,
     respondToLatest: options.respondToLatest ?? false,
-    systemPrompt: settings.systemPrompt
+    systemPrompt: settings.systemPrompt,
+    loreBudget: loreBudget()
   })
 
   // A trailing assistant message would read as a prefill to some models; close
@@ -211,26 +219,36 @@ export async function* streamContinuation(
   yield* streamChat(messages, settingsRepo.getSettings(), signal)
 }
 
-async function runOnce(messages: ChatMessage[]): Promise<string> {
+async function runOnce(messages: ChatMessage[], signal?: AbortSignal): Promise<string> {
   const parts: string[] = []
-  for await (const chunk of streamChat(messages, settingsRepo.getSettings())) {
+  for await (const chunk of streamChat(messages, settingsRepo.getSettings(), signal)) {
     parts.push(chunk)
   }
   return parts.join('').trim()
 }
 
-export async function summarize(sceneId: number): Promise<string> {
+export async function summarize(sceneId: number, signal?: AbortSignal): Promise<string> {
   const ctx = loadContext(sceneId)
   const history = messagesRepo.listMessages(sceneId)
-  const summary = await runOnce(buildSummaryPrompt(ctx.characters, ctx.scene, history))
+  const summary = await runOnce(buildSummaryPrompt(ctx.characters, ctx.scene, history), signal)
   scenesRepo.setSceneSummary(sceneId, summary)
   return summary
 }
 
-export async function impersonate(sceneId: number, draft = ''): Promise<string> {
+export async function impersonate(
+  sceneId: number,
+  draft = '',
+  signal?: AbortSignal
+): Promise<string> {
   const result = build(sceneId)
-  if (!result.ctx.persona) throw new Error('Choose a persona in scene setup first.')
-  return runOnce(buildImpersonationPrompt(result.built, result.ctx.persona, draft))
+  const persona = result.ctx.persona
+  if (!persona) throw new Error('Choose a persona in scene setup first.')
+  const raw = await runOnce(buildImpersonationPrompt(result.built, persona, draft), signal)
+  // The reply prompt is reused as-is, so its {Name} and [emotion] rules are
+  // still in front of the model; drop the tags rather than paste them into
+  // the composer.
+  const names = [...result.ctx.characters.map((c) => c.name), persona.name]
+  return stripWirePrefixes(raw, names, result.callSigns).content.trim()
 }
 
 /** Writes the scene as a Markdown transcript; returns the absolute path. */
@@ -265,10 +283,10 @@ function guessCharacter(line: string, characters: Character[]): Character {
 }
 
 /** Persist each suggested fact as a pending canon memory for review. */
-export async function suggestMemories(sceneId: number): Promise<Memory[]> {
+export async function suggestMemories(sceneId: number, signal?: AbortSignal): Promise<Memory[]> {
   const ctx = loadContext(sceneId)
   const history = messagesRepo.listMessages(sceneId)
-  const raw = await runOnce(buildMemorySuggestionPrompt(ctx.characters, ctx.scene, history))
+  const raw = await runOnce(buildMemorySuggestionPrompt(ctx.characters, ctx.scene, history), signal)
   const saved: Memory[] = []
   for (const line of raw.split('\n')) {
     const m = SUGGESTION_LINE_RE.exec(line)

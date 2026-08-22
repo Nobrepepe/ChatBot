@@ -11,13 +11,40 @@ import { Field } from '../../components/fields'
 import { Art } from '../../components/art'
 import { Confirm, useOverlay } from '../../components/overlay'
 import { useSnack } from '../../components/snack'
-import { call } from '../../lib/api'
+import { ApiError, call } from '../../lib/api'
 import { useIpcMutation, useIpcQuery } from '../../lib/queries'
 import { useChatStream } from './useChatStream'
 import { PromptDebugBody } from './PromptDebugOverlay'
 
 function Markdown({ children }: { children: string }): React.JSX.Element {
   return <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
+}
+
+/** The generations that answer in one piece rather than streaming into the transcript. */
+type OneShot = 'summarize' | 'impersonate' | 'memories'
+
+const ONE_SHOT_LABEL: Record<OneShot, string> = {
+  summarize: 'summarizing',
+  impersonate: 'drafting your turn',
+  memories: 'reading the scene'
+}
+
+/** Live state for a running one-shot: what it is doing, and how to stop it. */
+function OneShotProgress({
+  kind,
+  onCancel
+}: {
+  kind: OneShot
+  onCancel: () => void
+}): React.JSX.Element {
+  return (
+    <span style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'baseline' }}>
+      <PulseDot label={ONE_SHOT_LABEL[kind]} />
+      <TextAction kind="secondary" onClick={onCancel} title="Stop the generation and free the model">
+        Stop
+      </TextAction>
+    </span>
+  )
 }
 
 export default function ChatScreen(): React.JSX.Element {
@@ -70,6 +97,33 @@ export default function ChatScreen(): React.JSX.Element {
     snack(message, true)
   })
 
+  // Summary, impersonation and memory suggestions each cost a full prompt and
+  // cannot usefully overlap — with a streamed reply either. The ref is the
+  // real guard (state lands too late to stop a second click); the state only
+  // drives what the buttons look like while one runs.
+  const [oneShot, setOneShot] = useState<OneShot | null>(null)
+  const oneShotRef = useRef<OneShot | null>(null)
+  const canGenerate = oneShot === null && !stream.busy
+
+  async function runOneShot<T>(kind: OneShot, run: () => Promise<T>): Promise<T | null> {
+    if (oneShotRef.current !== null || stream.busy) return null
+    oneShotRef.current = kind
+    setOneShot(kind)
+    try {
+      return await run()
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.code !== 'cancelled') snack((err as Error).message, true)
+      return null
+    } finally {
+      oneShotRef.current = null
+      setOneShot(null)
+    }
+  }
+
+  function cancelOneShot(): void {
+    void call('chat:cancelOneShot', sceneId)
+  }
+
   const messages = messagesQuery.data ?? []
   const historyLimit = Math.max(1, Number(settingsQuery.data?.historyLimit ?? 30) || 30)
   const sent = Math.min(messages.length, historyLimit)
@@ -112,14 +166,14 @@ export default function ChatScreen(): React.JSX.Element {
 
   async function send(): Promise<void> {
     const text = draft.trim()
-    if (!text || stream.busy) return
+    if (!text || !canGenerate) return
     setDraft('')
     await stream.start({ kind: 'reply', sceneId, userMessage: text, responderId: responder?.id })
     refreshMessages()
   }
 
   async function regenerate(): Promise<void> {
-    if (stream.busy || messages.length === 0) return
+    if (!canGenerate || messages.length === 0) return
     const last = messages[messages.length - 1]!
     if (last.role !== 'user') {
       await call('messages:delete', last.id)
@@ -129,12 +183,10 @@ export default function ChatScreen(): React.JSX.Element {
   }
 
   async function impersonate(): Promise<void> {
-    try {
-      const suggestion = await call('chat:impersonate', sceneId, draft)
-      setDraft(suggestion)
-    } catch (err) {
-      snack((err as Error).message, true)
-    }
+    const suggestion = await runOneShot('impersonate', () =>
+      call('chat:impersonate', sceneId, draft)
+    )
+    if (suggestion !== null) setDraft(suggestion)
   }
 
   function editMessage(message: Message): void {
@@ -232,21 +284,29 @@ export default function ChatScreen(): React.JSX.Element {
     )
   }
 
+  async function summarizeScene(): Promise<void> {
+    const summary = await runOneShot('summarize', () => call('chat:summarize', sceneId))
+    if (summary === null) return
+    refreshMessages()
+    overlay.open({
+      eyebrow: 'Summary',
+      title: 'What this scene now remembers.',
+      render: () => <p className="body-text" style={{ whiteSpace: 'pre-wrap' }}>{summary}</p>
+    })
+  }
+
   async function suggestMemories(): Promise<void> {
-    try {
-      const suggestions = await call('chat:suggestMemories', sceneId)
-      if (suggestions.length === 0) {
-        snack('Nothing stood out as worth remembering.')
-        return
-      }
-      overlay.open({
-        eyebrow: 'Memory suggestions',
-        title: 'Review what may become canon.',
-        render: () => <SuggestionReview suggestions={suggestions} />
-      })
-    } catch (err) {
-      snack((err as Error).message, true)
+    const suggestions = await runOneShot('memories', () => call('chat:suggestMemories', sceneId))
+    if (suggestions === null) return
+    if (suggestions.length === 0) {
+      snack('Nothing stood out as worth remembering.')
+      return
     }
+    overlay.open({
+      eyebrow: 'Memory suggestions',
+      title: 'Review what may become canon.',
+      render: () => <SuggestionReview suggestions={suggestions} />
+    })
   }
 
   function SuggestionReview({ suggestions }: { suggestions: import('@shared/types').Memory[] }): React.JSX.Element {
@@ -428,24 +488,20 @@ export default function ChatScreen(): React.JSX.Element {
           messages are being sent
         </span>
         <FadingBar fill={messages.length ? sent / Math.max(messages.length, 1) : 0} width={220} />
-        <TextAction kind="secondary" onClick={async () => {
-          try {
-            const summary = await call('chat:summarize', sceneId)
-            refreshMessages()
-            overlay.open({
-              eyebrow: 'Summary',
-              title: 'What this scene now remembers.',
-              render: () => <p className="body-text" style={{ whiteSpace: 'pre-wrap' }}>{summary}</p>
-            })
-          } catch (err) {
-            snack((err as Error).message, true)
-          }
-        }}>
+        <TextAction kind="secondary" onClick={summarizeScene} disabled={!canGenerate}>
           Summarize
         </TextAction>
-        <TextAction kind="secondary" onClick={suggestMemories} title="The AI proposes canon facts from this scene for your review">
+        <TextAction
+          kind="secondary"
+          onClick={suggestMemories}
+          disabled={!canGenerate}
+          title="The AI proposes canon facts from this scene for your review"
+        >
           Suggest memories
         </TextAction>
+        {oneShot && oneShot !== 'impersonate' ? (
+          <OneShotProgress kind={oneShot} onCancel={cancelOneShot} />
+        ) : null}
         <TextAction
           kind="secondary"
           onClick={() => setDisplayMode.mutate([sceneId, displayMode === 'vn' ? 'chat' : 'vn'])}
@@ -560,8 +616,10 @@ export default function ChatScreen(): React.JSX.Element {
           draft={draft}
           setDraft={setDraft}
           busy={stream.busy}
+          oneShot={oneShot}
           onSend={send}
           onStop={stream.cancel}
+          onCancelOneShot={cancelOneShot}
           onRegenerate={regenerate}
           onImpersonate={persona ? impersonate : undefined}
         />
@@ -662,19 +720,24 @@ function Composer({
   draft,
   setDraft,
   busy,
+  oneShot,
   onSend,
   onStop,
+  onCancelOneShot,
   onRegenerate,
   onImpersonate
 }: {
   draft: string
   setDraft: (v: string) => void
   busy: boolean
+  oneShot: OneShot | null
   onSend: () => void
   onStop: () => void
+  onCancelOneShot: () => void
   onRegenerate: () => void
   onImpersonate?: () => void
 }): React.JSX.Element {
+  const canGenerate = oneShot === null && !busy
   return (
     <div className="block" style={{ gap: 'var(--space-2)' }}>
       <div className="field">
@@ -697,17 +760,31 @@ function Composer({
             Stop →
           </TextAction>
         ) : (
-          <TextAction size={24} onClick={onSend}>
+          <TextAction size={24} onClick={onSend} disabled={oneShot !== null}>
             Send →
           </TextAction>
         )}
-        <TextAction kind="secondary" onClick={onRegenerate} title="Replace the last reply">
+        <TextAction
+          kind="secondary"
+          onClick={onRegenerate}
+          disabled={!canGenerate}
+          title="Replace the last reply"
+        >
           Regenerate
         </TextAction>
         {onImpersonate ? (
-          <TextAction kind="secondary" onClick={onImpersonate} title="Draft your persona's next turn into the composer">
-            Impersonate
-          </TextAction>
+          oneShot === 'impersonate' ? (
+            <OneShotProgress kind={oneShot} onCancel={onCancelOneShot} />
+          ) : (
+            <TextAction
+              kind="secondary"
+              onClick={onImpersonate}
+              disabled={!canGenerate}
+              title="Draft your persona's next turn into the composer"
+            >
+              Impersonate
+            </TextAction>
+          )
         ) : null}
         <span className="caption">Enter sends · Shift+Enter makes a new line</span>
       </div>

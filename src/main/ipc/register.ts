@@ -17,6 +17,7 @@ import * as notesWorkspace from '../services/notesWorkspace'
 import * as hub from '../worldhub/consumerService'
 import { noteFingerprint } from '../services/notesService'
 import { cancelChatStream, startChatStream } from './chatStream'
+import { cancelSceneOneShot, runSceneOneShot } from './oneShot'
 
 /**
  * Registers one ipcMain.handle per IpcMethods entry. Handlers may be sync or
@@ -103,9 +104,17 @@ export function registerIpcHandlers(): void {
 
   handle('chat:start', startChatStream)
   handle('chat:cancel', cancelChatStream)
-  handle('chat:summarize', chat.summarize)
-  handle('chat:impersonate', chat.impersonate)
-  handle('chat:suggestMemories', chat.suggestMemories)
+  handle('chat:cancelOneShot', cancelSceneOneShot)
+  // One slot per scene, so a second click cannot stack another full prompt.
+  handle('chat:summarize', (sceneId) =>
+    runSceneOneShot(sceneId, (signal) => chat.summarize(sceneId, signal))
+  )
+  handle('chat:impersonate', (sceneId, draft) =>
+    runSceneOneShot(sceneId, (signal) => chat.impersonate(sceneId, draft, signal))
+  )
+  handle('chat:suggestMemories', (sceneId) =>
+    runSceneOneShot(sceneId, (signal) => chat.suggestMemories(sceneId, signal))
+  )
   handle('chat:promptDebug', (sceneId) => {
     const result = chat.build(sceneId)
     return { sections: result.built.sections, messages: result.built.messages }

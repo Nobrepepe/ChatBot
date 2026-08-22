@@ -127,6 +127,8 @@ export interface IpcMethods {
 
   'chat:start': (params: ChatStartParams) => number
   'chat:cancel': (requestId: number) => void
+  /** Stops the scene's in-flight one-shot (summary, impersonation, memories). */
+  'chat:cancelOneShot': (sceneId: number) => void
   'chat:summarize': (sceneId: number) => string
   'chat:impersonate': (sceneId: number, draft?: string) => string
   'chat:suggestMemories': (sceneId: number) => Memory[]

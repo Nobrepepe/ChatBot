@@ -43,10 +43,12 @@ export default function CharactersTab({ world }: { world: World }): React.JSX.El
               title={`Open ${c.name}`}
             >
               {art ? (
+                // Full colour here: this grid is for browsing into profiles, not
+                // for picking a cast. An unwritten profile is stated in the
+                // caption below instead of by dimming the art.
                 <Art
                   path={art}
                   treatment="alpha"
-                  ghost={empty}
                   style={{ width: '100%', aspectRatio: '16/9', objectFit: 'contain' }}
                 />
               ) : (

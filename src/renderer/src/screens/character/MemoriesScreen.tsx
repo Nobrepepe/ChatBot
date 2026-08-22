@@ -125,11 +125,14 @@ export default function MemoriesScreen(): React.JSX.Element {
       back={{ label: character.name, to: `/world/${worldId}/character/${characterId}` }}
       backdrop={
         character.portraitPath ? (
-          <Art
-            path={character.portraitPath}
-            treatment="alpha"
-            style={{ position: 'absolute', right: '-4%', bottom: 0, height: '86%', opacity: 0.55 }}
-          />
+          <>
+            <Art
+              path={character.portraitPath}
+              treatment="alpha"
+              style={{ position: 'absolute', right: '-4%', bottom: 0, height: '86%', opacity: 0.55 }}
+            />
+            <div className="scrim-side" />
+          </>
         ) : null
       }
     >

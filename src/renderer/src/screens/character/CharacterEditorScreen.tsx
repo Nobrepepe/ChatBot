@@ -243,11 +243,14 @@ export default function CharacterEditorScreen(): React.JSX.Element {
       }
       backdrop={
         draft.portraitPath ? (
-          <Art
-            path={draft.portraitPath}
-            treatment="alpha"
-            style={{ position: 'absolute', left: '-6%', bottom: 0, height: '92%', opacity: 0.3 }}
-          />
+          <>
+            <Art
+              path={draft.portraitPath}
+              treatment="alpha"
+              style={{ position: 'absolute', right: '-6%', bottom: 0, height: '92%', opacity: 0.34 }}
+            />
+            <div className="scrim-side" />
+          </>
         ) : null
       }
     >
@@ -261,6 +264,21 @@ export default function CharacterEditorScreen(): React.JSX.Element {
       </p>
 
       <div style={{ display: 'flex', gap: 'var(--space-6)', flexWrap: 'wrap' }}>
+        <div className="block" style={{ flex: '0 1 300px' }}>
+          <Eyebrow>Portrait</Eyebrow>
+          {draft.portraitPath ? (
+            <Art path={draft.portraitPath} treatment="alpha" style={{ width: '100%', maxHeight: 380 }} />
+          ) : (
+            <ArtPlaceholder label="NO PORTRAIT" aspect="3/4" style={{ width: 220 }} />
+          )}
+          <Eyebrow>Shelf image</Eyebrow>
+          {draft.tileImagePath ? (
+            <Art path={draft.tileImagePath} treatment="alpha" style={{ width: '100%' }} />
+          ) : (
+            <ArtPlaceholder label="NO ART" aspect="16/9" style={{ width: 220 }} />
+          )}
+        </div>
+
         <div className="block" style={{ flex: '1 1 420px', maxWidth: 640 }}>
           <Eyebrow>Basics</Eyebrow>
           <Field label="Name" value={draft.name} onChange={set('name')} readOnly={readOnly} />
@@ -392,20 +410,6 @@ export default function CharacterEditorScreen(): React.JSX.Element {
           )}
         </div>
 
-        <div className="block" style={{ flex: '0 1 300px' }}>
-          <Eyebrow>Portrait</Eyebrow>
-          {draft.portraitPath ? (
-            <Art path={draft.portraitPath} treatment="alpha" style={{ width: '100%', maxHeight: 380 }} />
-          ) : (
-            <ArtPlaceholder label="NO PORTRAIT" aspect="3/4" style={{ width: 220 }} />
-          )}
-          <Eyebrow>Shelf image</Eyebrow>
-          {draft.tileImagePath ? (
-            <Art path={draft.tileImagePath} treatment="alpha" style={{ width: '100%' }} />
-          ) : (
-            <ArtPlaceholder label="NO ART" aspect="16/9" style={{ width: 220 }} />
-          )}
-        </div>
       </div>
     </Screen>
   )

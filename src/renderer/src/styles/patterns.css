@@ -267,6 +267,33 @@
   );
   pointer-events: none;
 }
+/* Text sitting beside bled art. Spans the whole frame and fades to nothing at
+   the far edge — a scrim covering only part of the width draws a rectangle.
+   Default protects a left-hand column (art bleeding off the right). */
+.scrim-side {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to right,
+    var(--bg) 0%,
+    var(--bg) 50%,
+    color-mix(in srgb, var(--bg) 76%, transparent) 74%,
+    color-mix(in srgb, var(--bg) 30%, transparent) 90%,
+    transparent 100%
+  );
+}
+.scrim-side[data-side='left'] {
+  background: linear-gradient(
+    to left,
+    var(--bg) 0%,
+    var(--bg) 50%,
+    color-mix(in srgb, var(--bg) 76%, transparent) 74%,
+    color-mix(in srgb, var(--bg) 30%, transparent) 90%,
+    transparent 100%
+  );
+}
+
 .hatch {
   background: repeating-linear-gradient(
     45deg,

@@ -598,7 +598,10 @@ function writeReceipt(pkg: PackageInfo, staged: StagedPackage, storedAt: string)
     publicationId: manifest['publicationId'],
     applicationType: manifest['applicationType'],
     contractId: manifest['contract']['id'],
-    contractVersion: manifest['contract']['version'],
+    /** The Hub's revision of the contract record this package was built against. */
+    contractRevision: manifest['contract']['version'],
+    /** The contract format version, which is what compatibility is judged on. */
+    contractVersion: pkg.contract['contractVersion'],
     publishedAt: manifest['publishedAt'],
     importedAt: new Date().toISOString(),
     sourceType: staged.sourceType,

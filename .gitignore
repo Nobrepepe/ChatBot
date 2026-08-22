@@ -21,6 +21,10 @@ __pycache__/
 # User-imported world, character, and scene artwork
 assets/worlds/
 
+# World Hub publications exported from the Hub app — your content, not the
+# app's. Root-scoped so tests/fixtures/worldhub/*.zip stays tracked.
+/*.zip
+
 # Editor and operating-system files
 .idea/
 .vscode/

@@ -186,9 +186,11 @@ export function loadPackage(root: string, expectedAppType: string): PackageInfo 
   if (contract['appType'] !== manifest['applicationType']) {
     throw new PackageError("The embedded contract does not match the package's application type.")
   }
-  if (!SUPPORTED_CONTRACT_VERSIONS.has(manifest['contract']?.['version'])) {
-    throw new PackageError('This package uses a contract version this app does not support.')
-  }
+  // Compatibility is decided by the contract's *format* version, which the
+  // embedded document declares. manifest.contract.version is the Hub's
+  // revision counter for that contract record — it climbs every time the
+  // author edits the contract (renaming a recipe, adding a field), and
+  // gating on it would break every consumer on every edit.
   if (!SUPPORTED_CONTRACT_VERSIONS.has(contract['contractVersion'])) {
     throw new PackageError('This package uses a contract format this app does not support.')
   }

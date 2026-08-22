@@ -1,11 +1,8 @@
-# Local Python environment and generated files
-.venv/
-__pycache__/
-*.py[cod]
-*.egg-info/
-.pytest_cache/
-.coverage
-htmlcov/
+# Node / Electron build output
+node_modules/
+out/
+release/
+*.tsbuildinfo
 
 # Local configuration and secrets
 .env
@@ -15,15 +12,14 @@ htmlcov/
 .agents/
 .codex/
 
-# User-created app data (may include API keys, chats, notes, and settings)
+# Legacy local app data from the Flet era (never committed)
 data/
 storage/
+__pycache__/
+*.py[cod]
 
 # User-imported world, character, and scene artwork
 assets/worlds/
-
-# Private development notes
-chatbot_app
 
 # Editor and operating-system files
 .idea/

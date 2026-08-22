@@ -1,0 +1,23 @@
+appId: dev.nobrepepe.character-chat
+productName: Character Chat
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**
+  - package.json
+asarUnpack:
+  - '**/*.node'
+linux:
+  target:
+    - AppImage
+  category: Utility
+  desktopName: character-chat.desktop
+  syncDesktopName: true
+win:
+  target:
+    - nsis
+mac:
+  target:
+    - dmg
+npmRebuild: true

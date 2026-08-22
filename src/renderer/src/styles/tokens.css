@@ -1,0 +1,63 @@
+/*
+ * Character Chat — design tokens.
+ *
+ * Evolved from the Flet app's design system. Two principles are load-bearing
+ * and non-negotiable:
+ *   1. No boxes — edges are implied by fades, proximity and eyebrow labels,
+ *      never drawn as borders, cards, pills or filled panels.
+ *   2. Transparent-edge art — character art carries alpha and is never
+ *      clipped into a rectangle; opaque art is masked or scrimmed into the floor.
+ *
+ * Everything else here is a fresh starting point, meant to be iterated on.
+ */
+
+:root {
+  /* ---- Palette: warm charcoal floor, a single ember accent ---- */
+  --bg: #121014;
+  --bg-deep: #0c0a0e; /* recessed areas only — never a panel background */
+  --text-1: #ece7e1;
+  --text-dim: #c2bbb2;
+  --muted: #9a938b;
+  --muted-2: #857e77; /* contrast floor for real information */
+  --faint: #6b655f; /* decorative only */
+  --accent: #d9a86c; /* ember amber — the one action / ready / attention color */
+  --good: #9cc79a;
+  --bad: #cc8b7a;
+  --line: color-mix(in srgb, var(--text-1) 14%, transparent);
+  --line-input: color-mix(in srgb, var(--text-1) 20%, transparent);
+
+  /* ---- Type ---- */
+  --font-display: 'Newsreader', serif;
+  --font-body: 'IBM Plex Sans', sans-serif;
+  --text-scale: 1;
+
+  --size-display-xl: calc(4.6rem * var(--text-scale));
+  --size-display-l: calc(3.2rem * var(--text-scale));
+  --size-display-m: calc(2.1rem * var(--text-scale));
+  --size-display-s: calc(1.55rem * var(--text-scale));
+  --size-title: calc(1.3rem * var(--text-scale));
+  --size-body: 0.96rem;
+  --size-ui: 0.86rem;
+  --size-caption: 0.76rem;
+  --size-eyebrow: 0.71rem;
+
+  /* ---- Space ---- */
+  --gutter: clamp(24px, 4vw, 56px);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 14px;
+  --space-4: 22px;
+  --space-5: 36px;
+  --space-6: 56px;
+
+  /* ---- Motion ---- */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --fade-fast: 160ms;
+  --fade-route: 200ms;
+}
+
+[data-reduce-motion] * {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}

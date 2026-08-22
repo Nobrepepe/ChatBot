@@ -1,0 +1,58 @@
+{
+  "name": "character-chat",
+  "version": "2.0.0",
+  "description": "A desktop app for chatting with your fictional characters, powered by local AI models.",
+  "main": "out/main/index.js",
+  "author": "Nobrepepe",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "dist": "electron-vite build && electron-builder",
+    "mock": "node scripts/mock-server.mjs",
+    "test": "ELECTRON_RUN_AS_NODE=1 electron node_modules/vitest/vitest.mjs run",
+    "test:watch": "ELECTRON_RUN_AS_NODE=1 electron node_modules/vitest/vitest.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "lint": "eslint src tests scripts",
+    "format": "prettier --write src tests scripts",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.62.0",
+    "better-sqlite3": "^12.2.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.6.0",
+    "remark-gfm": "^4.0.0",
+    "yauzl": "^3.2.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.0",
+    "@testing-library/react": "^16.3.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/yauzl": "^2.10.3",
+    "@vitejs/plugin-react": "^4.5.0",
+    "electron": "^38.2.0",
+    "electron-builder": "^26.0.0",
+    "electron-vite": "^4.0.0",
+    "eslint": "^9.28.0",
+    "jsdom": "^26.1.0",
+    "prettier": "^3.5.0",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.33.0",
+    "vitest": "^3.2.0"
+  },
+  "allowScripts": {
+    "electron@38.8.6": true,
+    "better-sqlite3@12.11.1": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true,
+    "electron-winstaller@5.4.0": true
+  }
+}

@@ -2,6 +2,7 @@ import { BrowserWindow } from 'electron'
 import { STREAM_CHANNEL, type ChatStartParams, type StreamEvent } from '@shared/ipc'
 import * as chat from '../services/chatService'
 import * as messagesRepo from '../db/repo/messages'
+import { runAutoTasks } from '../services/autoTasks'
 import { generateNotesReply } from '../services/notesWorkspace'
 
 let nextRequestId = 1
@@ -61,7 +62,20 @@ export function startChatStream(params: ChatStartParams): number {
         }
         const text = received.trim()
         if (text) chat.saveReply(params.sceneId, text, buildResult)
-        emit({ requestId, type: 'done', message: aborted ? 'stopped' : undefined })
+        // The turn is not over until the automatic passes are: the renderer
+        // keeps the composer locked until 'done' arrives.
+        let trouble: string | undefined
+        if (!aborted && text) {
+          const report = await runAutoTasks(params.sceneId, (status) =>
+            emit({ requestId, type: 'status', message: status })
+          )
+          trouble = report.problems[0]
+        }
+        emit({
+          requestId,
+          type: 'done',
+          message: aborted ? 'stopped' : trouble
+        })
       } else {
         try {
           for await (const delta of chat.streamContinuation(

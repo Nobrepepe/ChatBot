@@ -8,6 +8,7 @@ import { Art } from '../../components/art'
 import { Confirm, useOverlay } from '../../components/overlay'
 import { useSnack } from '../../components/snack'
 import { useIpcMutation, useIpcQuery } from '../../lib/queries'
+import { MemoryProposalList } from '../chat/MemoryProposals'
 
 export default function MemoriesScreen(): React.JSX.Element {
   const overlay = useOverlay()
@@ -17,15 +18,16 @@ export default function MemoriesScreen(): React.JSX.Element {
   const characterId = Number(params.cid)
 
   const characterQuery = useIpcQuery('characters:get', characterId)
-  const memoriesQuery = useIpcQuery('memories:list', characterId, { status: 'any' })
+  const memoriesQuery = useIpcQuery('memories:list', characterId, { lifecycle: 'canonical' })
+  const proposalsQuery = useIpcQuery('memories:proposalsForCharacter', characterId)
   const save = useIpcMutation('memories:save', ['memories:list'])
   const remove = useIpcMutation('memories:delete', ['memories:list'])
 
   const character = characterQuery.data ?? null
   const all = memoriesQuery.data ?? []
-  const canon = all.filter((m) => m.type === 'canon' && m.status === 'approved')
-  const relationship = all.filter((m) => m.type === 'relationship' && m.status === 'approved')
-  const pending = all.filter((m) => m.status === 'pending')
+  const canon = all.filter((m) => m.type === 'canon')
+  const relationship = all.filter((m) => m.type === 'relationship')
+  const proposals = proposalsQuery.data ?? []
   const session = all.filter((m) => m.type === 'session')
   const injected = canon.length + relationship.length
   const [showSession, setShowSession] = useState(false)
@@ -54,7 +56,13 @@ export default function MemoriesScreen(): React.JSX.Element {
                 return
               }
               await save.mutateAsync([
-                { id: memory?.id ?? null, characterId, type, content: text.trim(), status: 'approved' }
+                {
+                  id: memory?.id ?? null,
+                  characterId,
+                  type,
+                  content: text.trim(),
+                  lifecycleStatus: 'canonical'
+                }
               ])
               close()
             }}
@@ -66,52 +74,33 @@ export default function MemoriesScreen(): React.JSX.Element {
     )
   }
 
-  function rows(items: Memory[], review = false): React.JSX.Element[] {
+  function rows(items: Memory[]): React.JSX.Element[] {
     return items.map((memory) => (
       <div key={memory.id}>
         <div className="row-line">
           <span className="body-text" style={{ flex: 1 }}>{memory.content}</span>
-          {review ? (
-            <>
-              <TextAction
-                kind="secondary"
-                onClick={() => save.mutate([{ ...memory, status: 'approved' }])}
-              >
-                Approve
-              </TextAction>
-              <TextAction kind="secondary" onClick={() => editor(memory, memory.type)}>
-                Edit
-              </TextAction>
-              <TextAction kind="destructive" onClick={() => remove.mutate([memory.id])}>
-                Reject
-              </TextAction>
-            </>
-          ) : (
-            <>
-              <TextAction kind="secondary" onClick={() => editor(memory, memory.type)}>
-                Edit
-              </TextAction>
-              <TextAction
-                kind="destructive"
-                onClick={() =>
-                  overlay.open({
-                    eyebrow: 'Confirm',
-                    title: 'Forget this?',
-                    render: (close) => (
-                      <Confirm
-                        body="It will no longer be sent with any scene."
-                        actionLabel="Forget it"
-                        close={close}
-                        onConfirm={() => remove.mutate([memory.id])}
-                      />
-                    )
-                  })
-                }
-              >
-                Delete
-              </TextAction>
-            </>
-          )}
+          <TextAction kind="secondary" onClick={() => editor(memory, memory.type)}>
+            Edit
+          </TextAction>
+          <TextAction
+            kind="destructive"
+            onClick={() =>
+              overlay.open({
+                eyebrow: 'Confirm',
+                title: 'Forget this?',
+                render: (close) => (
+                  <Confirm
+                    body="It will no longer be sent with any scene."
+                    actionLabel="Forget it"
+                    close={close}
+                    onConfirm={() => remove.mutate([memory.id])}
+                  />
+                )
+              })
+            }
+          >
+            Delete
+          </TextAction>
         </div>
         <Rule end={52 + ((memory.id * 9) % 32)} />
       </div>
@@ -160,13 +149,21 @@ export default function MemoriesScreen(): React.JSX.Element {
       <section className="block" style={{ maxWidth: 680 }}>
         <span style={{ display: 'flex', gap: 16, alignItems: 'baseline' }}>
           <Eyebrow>Waiting for review</Eyebrow>
-          {pending.length > 0 ? (
+          {proposals.length > 0 ? (
             <PulseDot label="blocking review" color="var(--bad)" />
           ) : (
             <span className="caption">nothing waiting</span>
           )}
         </span>
-        {rows(pending, true)}
+        {proposals.length > 0 ? (
+          <MemoryProposalList
+            proposals={proposals}
+            onSettled={() => {
+              void memoriesQuery.refetch()
+              void proposalsQuery.refetch()
+            }}
+          />
+        ) : null}
       </section>
 
       {session.length > 0 ? (

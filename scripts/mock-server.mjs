@@ -22,11 +22,39 @@ const SUMMARY = [
   '- Tension eased by the end of the conversation.'
 ].join('\n')
 
-const SUGGESTIONS = [
-  '- Daniela admitted she was avoiding everyone on purpose.',
-  '- Daniela is secretly glad the user came looking for her.',
-  '- The user promised to keep her secret about the rooftop.'
-].join('\n')
+/**
+ * The memory pass answers with memory_action blocks. Ids have to come from the
+ * prompt itself: a rewrite targets the first memory the prompt lists, and a
+ * create targets the first character it names.
+ */
+function memoryActions(system) {
+  const memoryId = system.match(/\[Memory id=(\d+)/)?.[1]
+  const characterId = system.match(/character_id=(\d+)/)?.[1] ?? '1'
+  const blocks = []
+  if (memoryId) {
+    blocks.push(
+      '```memory_action\n' +
+        JSON.stringify({
+          type: 'replace',
+          memory_id: Number(memoryId),
+          memory_type: 'relationship',
+          content: 'They are glad the user came looking for them.'
+        }) +
+        '\n```'
+    )
+  }
+  blocks.push(
+    '```memory_action\n' +
+      JSON.stringify({
+        type: 'create',
+        character_id: Number(characterId),
+        memory_type: 'canon',
+        content: 'They admitted they were avoiding everyone on purpose.'
+      }) +
+      '\n```'
+  )
+  return 'Two things changed in this scene.\n\n' + blocks.join('\n\n')
+}
 
 const MULTI_LINES = ['"I heard something down there."', '"Then we go together."', '"Fine. But quietly."']
 
@@ -36,7 +64,7 @@ function composeReply(payload) {
     if (m.role === 'system') system += m.content ?? ''
   }
   if (system.includes('Summarize the scene transcript')) return SUMMARY
-  if (system.includes('propose the most important facts')) return SUGGESTIONS
+  if (system.includes('maintaining the long-term memory')) return memoryActions(system)
   if (system.includes('helping the user roleplay as their persona')) {
     return '*I take a cautious step closer.* "Tell me what really happened."'
   }

@@ -7,8 +7,8 @@ export type SceneMode = (typeof SCENE_MODES)[number]
 export const MEMORY_TYPES = ['canon', 'relationship', 'session'] as const
 export type MemoryType = (typeof MEMORY_TYPES)[number]
 
-export const MEMORY_STATUSES = ['approved', 'pending'] as const
-export type MemoryStatus = (typeof MEMORY_STATUSES)[number]
+export const MEMORY_ACTION_TYPES = ['create', 'replace', 'forget'] as const
+export type MemoryActionType = (typeof MEMORY_ACTION_TYPES)[number]
 
 export const MESSAGE_ROLES = ['user', 'character', 'narrator', 'system-note'] as const
 export type MessageRole = (typeof MESSAGE_ROLES)[number]
@@ -19,8 +19,12 @@ export type NoteCategory = (typeof NOTE_CATEGORIES)[number]
 export const NOTE_CONTEXT_MODES = ['always', 'relevant', 'excluded'] as const
 export type NoteContextMode = (typeof NOTE_CONTEXT_MODES)[number]
 
-export const NOTE_LIFECYCLE_STATUSES = ['canonical', 'proposed', 'rejected', 'superseded'] as const
-export type NoteLifecycleStatus = (typeof NOTE_LIFECYCLE_STATUSES)[number]
+/** Shared by every reviewable row: a note, a memory. */
+export const LIFECYCLE_STATUSES = ['canonical', 'proposed', 'rejected', 'superseded'] as const
+export type LifecycleStatus = (typeof LIFECYCLE_STATUSES)[number]
+export const NOTE_LIFECYCLE_STATUSES = LIFECYCLE_STATUSES
+export type NoteLifecycleStatus = LifecycleStatus
+export type MemoryLifecycleStatus = LifecycleStatus
 
 export const NOTE_ACTION_TYPES = ['open', 'create', 'append', 'replace'] as const
 export type NoteActionType = (typeof NOTE_ACTION_TYPES)[number]
@@ -96,10 +100,8 @@ export interface Scene {
   worldId: number
   locationId: number | null
   title: string
-  premise: string
-  tone: string
-  timeOfDay: string
-  relationshipStatus: string
+  /** Summaries of earlier scenes, sent with every message in this one. */
+  previouslyOn: string
   mode: SceneMode
   summary: string
   narratorEnabled: boolean
@@ -108,6 +110,9 @@ export interface Scene {
   /** Per-scene display mode; null falls back to the global setting. */
   displayMode: DisplayMode | null
   characterIds: number[]
+  /** Visible-message counts at which the automatic passes last ran. */
+  autoSummaryAt: number
+  autoMemoriesAt: number
   createdAt: string
   updatedAt: string
 }
@@ -132,7 +137,7 @@ export interface Memory {
   type: MemoryType
   content: string
   sourceSceneId: number | null
-  status: MemoryStatus
+  lifecycleStatus: MemoryLifecycleStatus
   createdAt: string
 }
 
@@ -160,10 +165,8 @@ export interface SceneTemplate {
   id: number
   worldId: number
   name: string
-  premise: string
-  tone: string
-  timeOfDay: string
-  relationshipStatus: string
+  title: string
+  previouslyOn: string
   mode: SceneMode
   narratorEnabled: boolean
   locationId: number | null
@@ -205,6 +208,30 @@ export interface NoteSuggestion {
   status: SuggestionStatus
 }
 
+/** One reviewable memory action proposed by the model. */
+export interface MemorySuggestion {
+  id: number
+  sceneId: number | null
+  characterId: number
+  actionType: MemoryActionType
+  /** The memory the action lands on; a create allocates one up front. */
+  targetMemoryId: number | null
+  payload: Record<string, unknown>
+  status: SuggestionStatus
+  createdAt: string
+}
+
+/** A suggestion joined to the state of its target, for review and for the ledger. */
+export interface MemoryProposal extends MemorySuggestion {
+  characterName: string
+  lifecycleStatus: MemoryLifecycleStatus | null
+  /** What the memory says today; '' for a create. */
+  currentContent: string
+  /** What it would say once approved. */
+  proposedContent: string
+  memoryType: MemoryType
+}
+
 export interface WorldDraft {
   id?: number | null
   name: string
@@ -233,6 +260,12 @@ export interface AppSettings {
   systemPrompt: string
   reduceMotion: string
   textScale: string
+  /** '1' runs a summary pass every autoSummaryEvery replies. */
+  autoSummary: string
+  autoSummaryEvery: string
+  /** '1' runs a memory pass every autoMemoriesEvery replies, approving it. */
+  autoMemories: string
+  autoMemoriesEvery: string
 }
 
 export interface CharacterDraft {
@@ -282,10 +315,7 @@ export interface SceneDraft {
   id?: number | null
   worldId: number
   title?: string
-  premise?: string
-  tone?: string
-  timeOfDay?: string
-  relationshipStatus?: string
+  previouslyOn?: string
   mode?: SceneMode
   narratorEnabled?: boolean
   personaId?: number | null
@@ -296,10 +326,8 @@ export interface SceneTemplateDraft {
   id?: number | null
   worldId: number
   name: string
-  premise?: string
-  tone?: string
-  timeOfDay?: string
-  relationshipStatus?: string
+  title?: string
+  previouslyOn?: string
   mode?: SceneMode
   narratorEnabled?: boolean
   locationId?: number | null
@@ -313,7 +341,7 @@ export interface MemoryDraft {
   type: MemoryType
   content: string
   sourceSceneId?: number | null
-  status?: MemoryStatus
+  lifecycleStatus?: MemoryLifecycleStatus
 }
 
 export interface WorldNoteDraft {
@@ -347,5 +375,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   displayMode: 'chat',
   systemPrompt: '',
   reduceMotion: '0',
-  textScale: '1.0'
+  textScale: '1.0',
+  autoSummary: '0',
+  autoSummaryEvery: '10',
+  autoMemories: '0',
+  autoMemoriesEvery: '20'
 }

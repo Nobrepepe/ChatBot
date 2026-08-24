@@ -1,6 +1,6 @@
 /** One-shot prompts: summary, impersonation, continuation, memory suggestions. */
 
-import type { Character, Message, Persona, Scene } from '@shared/types'
+import type { Character, Memory, MemoryProposal, Message, Persona, Scene } from '@shared/types'
 import type { ChatMessage } from '../providers/openaiCompat'
 import type { BuiltPrompt } from './promptBuilder'
 
@@ -33,7 +33,7 @@ export function buildSummaryPrompt(
     'below in a compact way that preserves everything important: key events, ' +
     'emotional shifts, revelations, promises, and changes in the relationship. ' +
     'Write it as a short list of plain factual sentences. Do not invent details.'
-  const user = `Scene premise: ${scene.premise || '(none)'}\n\nTranscript:\n${transcript}`
+  const user = `Scene: ${scene.title || '(untitled)'}\n\nTranscript:\n${transcript}`
   return [
     { role: 'system', content: system },
     { role: 'user', content: user }
@@ -93,24 +93,91 @@ export function buildContinuationPrompt(context: BuiltPrompt, partial: string): 
   ]
 }
 
-export function buildMemorySuggestionPrompt(
-  characters: Character[],
-  scene: Scene,
+export interface MemoryPromptInput {
+  characters: Character[]
+  scene: Scene
   history: Message[]
-): ChatMessage[] {
+  /** Canonical memories per character id — what the model may revise. */
+  memoriesByChar: Map<number, Memory[]>
+  /** Proposals the user has not resolved yet, so a second pass revises them. */
+  ledger: MemoryProposal[]
+}
+
+const MEMORY_ACTION_CONTRACT =
+  'Propose changes by appending fenced `memory_action` JSON blocks after any ' +
+  'brief note you write. Put exactly one JSON object in each block:\n' +
+  '```memory_action\n' +
+  '{"type":"replace","memory_id":12,"memory_type":"relationship",' +
+  '"content":"Daniela trusts the user completely."}\n' +
+  '```\n' +
+  'Supported types are create, replace and forget.\n' +
+  '- create: include character_id, memory_type and content.\n' +
+  '- replace: include a listed integer memory_id, content, and memory_type.\n' +
+  '- forget: include a listed integer memory_id and a short reason.\n' +
+  'Valid memory_type values are canon (permanently true of the character), ' +
+  'relationship (how they currently feel about the user), and session ' +
+  '(scene-local, never sent to the model). Never guess an id that is not ' +
+  'listed. Never claim a change happened — the user reviews every action.'
+
+const MEMORY_REVISION_RULE =
+  'A memory is the current state, not a diary. When something listed below is ' +
+  'now out of date, REPLACE it rather than creating a second memory that ' +
+  'contradicts it: a character has one relationship memory, not a history of ' +
+  'them. Use forget only when a memory has become false and nothing replaces ' +
+  'it. Create only for something genuinely new. Prefer few, load-bearing ' +
+  'changes: propose at most six actions.'
+
+/**
+ * The memory pass is the notes workspace applied to a character: every memory
+ * carries a stable id, and the model is shown what it already proposed, so it
+ * revises the relationship memory instead of stacking a contradicting one
+ * beside it.
+ */
+export function buildMemorySuggestionPrompt(input: MemoryPromptInput): ChatMessage[] {
+  const { characters, scene, history, memoriesByChar, ledger } = input
   const transcript = transcriptLines(characters, history).join('\n')
-  const names = characters.map((c) => c.name).join(', ')
-  const system =
-    'You are a helpful writing assistant. Read the scene transcript and ' +
-    'propose the most important facts worth remembering permanently about ' +
-    `the character(s): ${names}. Focus on revelations, promises, decisions, ` +
-    'relationship changes, and new canon details. Write ONLY a plain list, ' +
-    "one fact per line, each line starting with '- '. Each fact must be a " +
-    'single self-contained sentence naming the character it is about. ' +
-    'Propose at most 6 facts. Do not invent anything not in the transcript.'
-  const user = `Scene premise: ${scene.premise || '(none)'}\n\nTranscript:\n${transcript}`
+  const names = characters.map((c) => `${c.name} (character_id=${c.id})`).join(', ')
+
+  const parts = [
+    'You are a careful writing assistant maintaining the long-term memory of ' +
+      `the character(s): ${names}. Read the scene transcript and decide what ` +
+      'their memory should say now. Focus on revelations, promises, ' +
+      'decisions, relationship changes, and new canon. Do not invent anything ' +
+      'the transcript does not support.',
+    MEMORY_REVISION_RULE,
+    MEMORY_ACTION_CONTRACT
+  ]
+
+  const blocks: string[] = []
+  for (const character of characters) {
+    const memories = memoriesByChar.get(character.id) ?? []
+    const lines = memories.length
+      ? memories.map((m) => `[Memory id=${m.id} · ${m.type}] ${m.content}`).join('\n')
+      : '(nothing remembered yet)'
+    blocks.push(`### ${character.name} (character_id=${character.id})\n${lines}`)
+  }
+  parts.push('## Memories held today\n' + blocks.join('\n\n'))
+
+  if (ledger.length) {
+    const lines = ledger.map(
+      (p) =>
+        `[Proposal ${p.id} · ${p.actionType} · memory_id=${p.targetMemoryId} · ` +
+        `${p.status}] for ${p.characterName}\n` +
+        (p.currentContent ? `Currently: ${p.currentContent}\n` : '') +
+        `Proposed: ${p.proposedContent || '(removal)'}`
+    )
+    parts.push(
+      '## Proposals still awaiting the user\n' +
+        'These are not canon yet. Their memory ids are real and stable: revise ' +
+        'one with another replace rather than proposing the same thing again. ' +
+        'A rejected proposal may be reworked.\n\n' +
+        lines.join('\n\n')
+    )
+  }
+
+  const user = `Scene: ${scene.title || '(untitled)'}\n\nTranscript:\n${transcript}`
   return [
-    { role: 'system', content: system },
+    { role: 'system', content: parts.join('\n\n') },
     { role: 'user', content: user }
   ]
 }

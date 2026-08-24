@@ -7,11 +7,11 @@ import {
   CONTINUE_INSTRUCTION
 } from '@main/prompt/auxPrompts'
 import type { BuiltPrompt } from '@main/prompt/promptBuilder'
-import type { Character, Message, Persona, Scene } from '@shared/types'
+import type { Character, Memory, MemoryProposal, Message, Persona, Scene } from '@shared/types'
 
 const lirael = { id: 11, name: 'Lirael' } as Character
 const morgana = { id: 12, name: 'Morgana' } as Character
-const scene = { premise: 'A storm.', mode: 'roleplay' } as Scene
+const scene = { title: 'A storm.', mode: 'roleplay' } as Scene
 const persona: Persona = { id: 1, name: 'Rui', description: 'A scribe.', createdAt: '' }
 
 let id = 0
@@ -109,10 +109,70 @@ describe('buildContinuationPrompt', () => {
 })
 
 describe('buildMemorySuggestionPrompt', () => {
-  it('asks for at most six self-contained bullet facts', () => {
-    const messages = buildMemorySuggestionPrompt([lirael, morgana], scene, history)
-    expect(messages[0]!.content).toContain('propose the most important facts')
-    expect(messages[0]!.content).toContain('Lirael, Morgana')
-    expect(messages[0]!.content).toContain('at most 6 facts')
+  function memory(id: number, characterId: number, type: Memory['type'], content: string): Memory {
+    return { id, characterId, type, content, sourceSceneId: null, lifecycleStatus: 'canonical', createdAt: '' }
+  }
+
+  const base = {
+    characters: [lirael, morgana],
+    scene,
+    history,
+    memoriesByChar: new Map([
+      [11, [memory(7, 11, 'relationship', 'Lirael barely tolerates the user.')]],
+      [12, []]
+    ]),
+    ledger: [] as MemoryProposal[]
+  }
+
+  it('names each character with the id an action must use', () => {
+    const system = buildMemorySuggestionPrompt(base)[0]!.content
+    expect(system).toContain('Lirael (character_id=11)')
+    expect(system).toContain('Morgana (character_id=12)')
+  })
+
+  it('lists what is remembered today with stable ids', () => {
+    const system = buildMemorySuggestionPrompt(base)[0]!.content
+    expect(system).toContain('[Memory id=7 · relationship] Lirael barely tolerates the user.')
+    expect(system).toContain('(nothing remembered yet)')
+  })
+
+  it('asks for a rewrite rather than a second, contradicting memory', () => {
+    const system = buildMemorySuggestionPrompt(base)[0]!.content
+    expect(system).toContain('REPLACE it rather than creating a second memory')
+    expect(system).toContain('memory_action')
+    expect(system).toContain('at most six actions')
+  })
+
+  it('shows proposals still awaiting the user so a second pass revises them', () => {
+    const system = buildMemorySuggestionPrompt({
+      ...base,
+      ledger: [
+        {
+          id: 3,
+          sceneId: 1,
+          characterId: 11,
+          characterName: 'Lirael',
+          actionType: 'replace',
+          targetMemoryId: 7,
+          payload: {},
+          status: 'pending',
+          lifecycleStatus: 'canonical',
+          currentContent: 'Lirael barely tolerates the user.',
+          proposedContent: 'Lirael trusts the user now.',
+          memoryType: 'relationship',
+          createdAt: ''
+        }
+      ]
+    })[0]!.content
+    expect(system).toContain('[Proposal 3 · replace · memory_id=7 · pending] for Lirael')
+    expect(system).toContain('Proposed: Lirael trusts the user now.')
+    expect(system).toContain('not canon yet')
+  })
+
+  it('carries the transcript with the scene it came from', () => {
+    const user = buildMemorySuggestionPrompt(base)[1]!.content
+    expect(user).toContain('Scene: A storm.')
+    expect(user).toContain('Lirael: "Who is there?"')
+    expect(user).not.toContain('deleted line')
   })
 })

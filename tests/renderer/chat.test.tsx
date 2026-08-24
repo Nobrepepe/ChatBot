@@ -5,6 +5,7 @@ import {
   installFakeApi,
   makeCharacter,
   makeMessage,
+  makeProposal,
   makeScene,
   makeWorld,
   type FakeApi
@@ -27,6 +28,9 @@ function seed(over: { characterIds?: number[]; messages?: ReturnType<typeof make
 
 const composer = (): HTMLElement => screen.getByPlaceholderText('Say something')
 
+const castTile = (name: string): HTMLElement =>
+  screen.getByRole('button', { name: new RegExp(`${name}\\s*(in|not in) this scene`) })
+
 /** Push a streaming chunk from the fake main process. */
 async function chunk(text: string): Promise<void> {
   await act(async () => {
@@ -38,6 +42,62 @@ async function finish(): Promise<void> {
     api.done(api.lastRequestId)
   })
 }
+
+/**
+ * jsdom has no layout, so a scroll region has to be described to it: the page
+ * is taller than the viewport, which is exactly the case the transcript has to
+ * handle (the screen grows, so the document scrolls, not the transcript).
+ */
+function makePageScrollable(scrollHeight = 2000, clientHeight = 800): void {
+  for (const [prop, value] of [
+    ['scrollHeight', scrollHeight],
+    ['clientHeight', clientHeight]
+  ] as const) {
+    Object.defineProperty(document.documentElement, prop, { value, configurable: true })
+  }
+  document.documentElement.scrollTop = 0
+}
+
+describe('entering a scene', () => {
+  beforeEach(() => {
+    seed({
+      messages: Array.from({ length: 40 }, (_, i) =>
+        makeMessage({ id: 200 + i, sceneId: 5, content: `line ${i}` })
+      )
+    })
+    makePageScrollable()
+  })
+
+  it('lands on the last message instead of the top of the backlog', async () => {
+    renderRoute('/chat/5')
+    await screen.findByText('line 39')
+    await waitFor(() => expect(document.documentElement.scrollTop).toBe(2000))
+  })
+
+  it('follows a streaming reply while the reader is at the bottom', async () => {
+    renderRoute('/chat/5')
+    await screen.findByText('line 39')
+    await waitFor(() => expect(document.documentElement.scrollTop).toBe(2000))
+    // Still within a line or two of the newest message.
+    document.documentElement.scrollTop = 1150
+    await userEvent.type(composer(), 'Hello.')
+    await userEvent.keyboard('{Enter}')
+    await chunk('She looks up.')
+    await waitFor(() => expect(document.documentElement.scrollTop).toBe(2000))
+  })
+
+  it('leaves the reader alone once they have scrolled back into the scene', async () => {
+    renderRoute('/chat/5')
+    await screen.findByText('line 39')
+    await waitFor(() => expect(document.documentElement.scrollTop).toBe(2000))
+    document.documentElement.scrollTop = 200
+    await userEvent.type(composer(), 'Hello.')
+    await userEvent.keyboard('{Enter}')
+    await chunk('She looks up.')
+    await screen.findByText(/She looks up/)
+    expect(document.documentElement.scrollTop).toBe(200)
+  })
+})
 
 describe('the composer', () => {
   beforeEach(() => seed())
@@ -307,7 +367,115 @@ describe('scene tools', () => {
   it('reports nothing worth remembering rather than an empty overlay', async () => {
     renderRoute('/chat/5')
     await userEvent.click(await screen.findByRole('button', { name: 'Suggest memories' }))
-    expect(await screen.findByText('Nothing stood out as worth remembering.')).toBeInTheDocument()
+    expect(
+      await screen.findByText('Nothing in the scene changed what they carry.')
+    ).toBeInTheDocument()
+  })
+
+  it('opens proposed memory changes for review rather than writing them', async () => {
+    api.store.proposals.push(
+      makeProposal({
+        id: 40,
+        sceneId: 5,
+        characterId: 10,
+        characterName: 'Ayame',
+        actionType: 'replace',
+        targetMemoryId: 30,
+        currentContent: 'She barely tolerates you.',
+        proposedContent: 'She trusts you now.',
+        memoryType: 'relationship'
+      })
+    )
+    renderRoute('/chat/5')
+    await userEvent.click(await screen.findByRole('button', { name: 'Suggest memories' }))
+    expect(
+      await screen.findByRole('dialog', { name: 'Review what they would remember.' })
+    ).toBeInTheDocument()
+    expect(screen.getByText('She barely tolerates you.')).toBeInTheDocument()
+    expect(screen.getByText('She trusts you now.')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /Keep it/ }))
+    await waitFor(() => expect(api.callsTo('memories:approveSuggestion')).toHaveLength(1))
+  })
+
+  it('carries a summary into the next scene in the series', async () => {
+    api.store.scenes[0]!.title = 'The rooftop'
+    const view = renderRoute('/chat/5')
+    await userEvent.click(await screen.findByRole('button', { name: 'Summarize' }))
+    await userEvent.click(await screen.findByRole('button', { name: /Continue as a new scene/ }))
+    await waitFor(() => expect(view.path()).toBe('/world/1/scene/new'))
+    expect(await screen.findByLabelText('Title')).toHaveValue('The rooftop - Part II')
+    expect(screen.getByLabelText('Previously on')).toHaveValue('A summary.')
+    expect(castTile('Ayame')).toHaveTextContent('in this scene')
+  })
+})
+
+describe('inviting a character', () => {
+  beforeEach(() => seed({ messages: [makeMessage({ id: 100, sceneId: 5 })] }))
+
+  it('offers only the characters who are not already here', async () => {
+    renderRoute('/chat/5')
+    await userEvent.click(await screen.findByRole('button', { name: 'Invite character' }))
+    expect(await screen.findByRole('dialog', { name: 'Who else is here?' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Kaguya/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Ayame/ })).not.toBeInTheDocument()
+  })
+
+  it('turns the scene into a group scene and says who arrived', async () => {
+    renderRoute('/chat/5')
+    await userEvent.click(await screen.findByRole('button', { name: 'Invite character' }))
+    await userEvent.click(await screen.findByRole('button', { name: /Kaguya/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^Invite →/ }))
+
+    await waitFor(() => expect(api.callsTo('scenes:inviteCharacters')).toEqual([[5, [11]]]))
+    expect(await screen.findByText('Kaguya joins the scene.')).toBeInTheDocument()
+    // A second voice means the scene now needs to be told who answers.
+    expect(await screen.findByRole('button', { name: 'Choose responder' })).toBeInTheDocument()
+  })
+
+  it('will not invite nobody', async () => {
+    renderRoute('/chat/5')
+    await userEvent.click(await screen.findByRole('button', { name: 'Invite character' }))
+    expect(await screen.findByRole('button', { name: /^Invite →/ })).toBeDisabled()
+  })
+
+  it('says so when the whole world is already in the scene', async () => {
+    seed({ characterIds: [10, 11] })
+    renderRoute('/chat/5')
+    await userEvent.click(await screen.findByRole('button', { name: 'Invite character' }))
+    expect(
+      await screen.findByText('Everyone in this world is already in the scene.')
+    ).toBeInTheDocument()
+  })
+})
+
+describe('an automatic pass at the end of a turn', () => {
+  beforeEach(() => seed())
+
+  it('holds the composer until the pass finishes, then delivers the turn', async () => {
+    renderRoute('/chat/5')
+    await userEvent.type(await screen.findByPlaceholderText('Say something'), 'Hello.')
+    await userEvent.keyboard('{Enter}')
+    await chunk('She looks up.')
+    await act(async () => api.status(api.lastRequestId, 'summarizing'))
+
+    expect(await screen.findByText('summarizing')).toBeInTheDocument()
+    expect(screen.getByText('the reply lands when this finishes')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Send →' })).not.toBeInTheDocument()
+
+    await finish()
+    expect(await screen.findByRole('button', { name: 'Send →' })).toBeEnabled()
+  })
+
+  it('says so when an automatic pass could not run', async () => {
+    renderRoute('/chat/5')
+    await userEvent.type(await screen.findByPlaceholderText('Say something'), 'Hello.')
+    await userEvent.keyboard('{Enter}')
+    await chunk('She looks up.')
+    await act(async () => api.done(api.lastRequestId, 'The automatic summary did not run: offline'))
+    expect(
+      await screen.findByText('The automatic summary did not run: offline')
+    ).toBeInTheDocument()
   })
 })
 

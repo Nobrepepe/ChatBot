@@ -10,7 +10,7 @@ import { useIpcQuery } from '../../lib/queries'
 import { useQueryClient } from '@tanstack/react-query'
 import WorldHubSection from './WorldHubSection'
 
-const SECTIONS = ['Endpoint', 'Generation', 'Appearance', 'World Hub'] as const
+const SECTIONS = ['Endpoint', 'Generation', 'Automatic', 'Appearance', 'World Hub'] as const
 
 export default function SettingsScreen(): React.JSX.Element {
   const { snack } = useSnack()
@@ -35,7 +35,9 @@ export default function SettingsScreen(): React.JSX.Element {
       ['Top-p', values.topP],
       ['Max tokens', values.maxTokens],
       ['History window', values.historyLimit],
-      ['Lore budget', values.loreBudget]
+      ['Lore budget', values.loreBudget],
+      ['Summary interval', values.autoSummaryEvery],
+      ['Memory interval', values.autoMemoriesEvery]
     ] as const) {
       if (Number.isNaN(Number(value))) {
         snack(`${label} needs a number.`, true)
@@ -132,6 +134,59 @@ export default function SettingsScreen(): React.JSX.Element {
           />
           <p className="body-text" style={{ maxWidth: 440 }}>
             Streaming shows the reply as it is written; complete replies arrive all at once.
+          </p>
+        </div>
+      ) : null}
+
+      {section === 'Automatic' ? (
+        <div className="block" style={{ maxWidth: 560 }}>
+          <p className="body-text" style={{ maxWidth: 460 }}>
+            Each pass is a second full request, sent after the reply. Sending is held until it
+            finishes, so replies take noticeably longer on the turns one runs.
+          </p>
+          <Rule end={62} />
+
+          <Eyebrow>Summary</Eyebrow>
+          <TextTabs
+            items={['0', '1'] as const}
+            labels={{ '0': 'Only when I ask', '1': 'Summarize on its own' }}
+            selected={draft.autoSummary === '1' ? '1' : '0'}
+            onSelect={(v) => set('autoSummary')(v)}
+            neutral
+          />
+          {draft.autoSummary === '1' ? (
+            <Field
+              label="Every … messages"
+              value={draft.autoSummaryEvery}
+              onChange={set('autoSummaryEvery')}
+            />
+          ) : null}
+          <p className="caption">
+            The scene keeps a running summary, shown on the home screen and beside the scene in
+            Sessions. Messages that fall outside the history window return as that one line.
+          </p>
+
+          <Rule end={54} />
+
+          <Eyebrow>Memories</Eyebrow>
+          <TextTabs
+            items={['0', '1'] as const}
+            labels={{ '0': 'Only when I ask', '1': 'Keep memories on its own' }}
+            selected={draft.autoMemories === '1' ? '1' : '0'}
+            onSelect={(v) => set('autoMemories')(v)}
+            neutral
+          />
+          {draft.autoMemories === '1' ? (
+            <Field
+              label="Every … messages"
+              value={draft.autoMemoriesEvery}
+              onChange={set('autoMemoriesEvery')}
+            />
+          ) : null}
+          <p className="caption">
+            Proposed memories are approved for you rather than waiting for review — the model may
+            rewrite an existing memory. Everything it writes stays editable on the character's
+            memories screen.
           </p>
         </div>
       ) : null}

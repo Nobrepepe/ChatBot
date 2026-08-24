@@ -61,15 +61,16 @@ describe('starting the scene', () => {
     const view = renderRoute('/world/1/scene/new')
     await userEvent.click(await screen.findByRole('button', { name: /Ayame/ }))
     await userEvent.click(castTile('Kaguya'))
-    await userEvent.type(screen.getByLabelText('Premise'), 'A storm traps everyone inside.')
+    await userEvent.type(screen.getByLabelText('Title'), 'The storm')
+    await userEvent.type(screen.getByLabelText('Previously on'), 'They parted badly last time.')
     await userEvent.click(screen.getByRole('button', { name: /Begin the scene/ }))
 
     await waitFor(() => expect(api.callsTo('scenes:save')).toHaveLength(1))
     const [draft] = api.callsTo('scenes:save')[0] as [any]
     expect(draft).toMatchObject({
       worldId: 1,
-      premise: 'A storm traps everyone inside.',
-      title: 'A storm traps everyone inside.',
+      title: 'The storm',
+      previouslyOn: 'They parted badly last time.',
       mode: 'roleplay',
       narratorEnabled: false,
       characterIds: [10, 11]
@@ -90,9 +91,12 @@ describe('starting the scene', () => {
     expect(draft).toMatchObject({ mode: 'interview', narratorEnabled: true, personaId: 20 })
   })
 
-  it('prefills the tone from the world', async () => {
+  it('asks for nothing the world or the character already answers', async () => {
     renderRoute('/world/1/scene/new')
-    await waitFor(() => expect(screen.getByLabelText('Tone')).toHaveValue('Wistful'))
+    await screen.findByLabelText('Title')
+    for (const gone of ['Tone', 'Time of day', 'Relationship status', 'Premise']) {
+      expect(screen.queryByLabelText(gone)).not.toBeInTheDocument()
+    }
   })
 
   it('names an untitled scene rather than leaving it blank', async () => {
@@ -131,10 +135,8 @@ describe('saved setups', () => {
       id: 30,
       worldId: 1,
       name: 'Rooftop opener',
-      premise: 'On the rooftop.',
-      tone: 'Tense',
-      timeOfDay: 'Night',
-      relationshipStatus: 'Wary',
+      title: 'On the rooftop.',
+      previouslyOn: 'They parted badly last time.',
       mode: 'roleplay',
       narratorEnabled: true,
       locationId: null,
@@ -142,7 +144,8 @@ describe('saved setups', () => {
       characterIds: [10, 999]
     })
     renderRoute('/world/1/scene/new/30')
-    await waitFor(() => expect(screen.getByLabelText('Premise')).toHaveValue('On the rooftop.'))
+    await waitFor(() => expect(screen.getByLabelText('Title')).toHaveValue('On the rooftop.'))
+    expect(screen.getByLabelText('Previously on')).toHaveValue('They parted badly last time.')
     expect(castTile('Ayame')).toHaveTextContent('in this scene')
     expect(castTile('Kaguya')).toHaveTextContent('not in this scene')
   })

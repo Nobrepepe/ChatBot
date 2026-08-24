@@ -3,6 +3,7 @@ import type { World } from '@shared/types'
 import { Eyebrow, Rule, TextAction } from '../../components/primitives'
 import { Confirm, useOverlay } from '../../components/overlay'
 import { useIpcMutation, useIpcQuery } from '../../lib/queries'
+import { summaryLine } from '../../lib/summaryLine'
 
 function relative(iso: string): string {
   const days = Math.floor((Date.now() - Date.parse(iso)) / 86_400_000)
@@ -35,11 +36,16 @@ export default function SessionsTab({ world }: { world: World }): React.JSX.Elem
         <div key={scene.id}>
           <div className="row-line">
             <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <span className="row-title">{scene.title || scene.premise || 'Untitled scene'}</span>
+              <span className="row-title">{scene.title || 'Untitled scene'}</span>
               <span className="caption">
                 {scene.characterIds.map((id) => nameById.get(id) ?? '?').join(', ') || 'No cast'} ·{' '}
                 {relative(scene.updatedAt || scene.createdAt)}
               </span>
+              {scene.summary.trim() ? (
+                <span className="caption" style={{ color: 'var(--muted-2)' }}>
+                  {summaryLine(scene.summary, 150)}
+                </span>
+              ) : null}
             </span>
             <TextAction kind="secondary" onClick={() => navigate(`/chat/${scene.id}`)}>
               Open scene →

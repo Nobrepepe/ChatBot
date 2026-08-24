@@ -114,7 +114,7 @@ describe('updates and pinning', () => {
     expect(settingsRepo.activePublicationId()).toBe(expected.publicationV2)
     // Private data survived untouched.
     expect(messagesRepo.listMessages(ids.sceneId)).toHaveLength(1)
-    expect(memoriesRepo.listMemories(ids.characterId, { status: 'any' })).toHaveLength(1)
+    expect(memoriesRepo.listMemories(ids.characterId, { lifecycle: 'any' })).toHaveLength(1)
     expect(personasRepo.getPersona(ids.personaId)).not.toBeNull()
     expect(notesRepo.getWorldNote(ids.noteId)).not.toBeNull()
 

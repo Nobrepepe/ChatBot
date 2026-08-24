@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { SceneMode } from '@shared/types'
 import { Screen } from '../../components/Screen'
 import { Eyebrow, PulseDot, Rule, TextAction, TextTabs } from '../../components/primitives'
@@ -16,6 +16,13 @@ const MODE_VALUE: Record<(typeof MODES)[number], SceneMode> = {
   Interview: 'interview',
   'Author assistant': 'author'
 }
+/** Router state a continued scene arrives with. */
+export interface ScenePrefill {
+  title?: string
+  previouslyOn?: string
+  characterIds?: number[]
+}
+
 const MODE_LABEL: Record<SceneMode, (typeof MODES)[number]> = {
   roleplay: 'Roleplay',
   interview: 'Interview',
@@ -28,6 +35,7 @@ export default function SceneSetupScreen(): React.JSX.Element {
   const { snack } = useSnack()
   const params = useParams<{ wid: string; templateId?: string }>()
   const worldId = Number(params.wid)
+  const prefill = useLocation().state as ScenePrefill | null
 
   const world = useIpcQuery('worlds:get', worldId)
   const charactersQuery = useIpcQuery('characters:list', worldId)
@@ -35,19 +43,13 @@ export default function SceneSetupScreen(): React.JSX.Element {
   const templatesQuery = useIpcQuery('templates:list', worldId)
 
   const [cast, setCast] = useState<Set<number>>(new Set())
-  const [premise, setPremise] = useState('')
-  const [timeOfDay, setTimeOfDay] = useState('')
-  const [tone, setTone] = useState('')
-  const [relationship, setRelationship] = useState('')
+  const [title, setTitle] = useState('')
+  const [previouslyOn, setPreviouslyOn] = useState('')
   const [mode, setMode] = useState<(typeof MODES)[number]>('Roleplay')
   const [personaId, setPersonaId] = useState('')
   const [narrator, setNarrator] = useState('off')
   const [loadedTemplate, setLoadedTemplate] = useState<number | null>(null)
-
-  useEffect(() => {
-    if (!world.data || tone) return
-    setTone(world.data.tone)
-  }, [world.data])
+  const [seeded, setSeeded] = useState(false)
 
   const characters = charactersQuery.data ?? []
   const templates = templatesQuery.data ?? []
@@ -57,10 +59,8 @@ export default function SceneSetupScreen(): React.JSX.Element {
     if (!template) return
     const validIds = new Set(characters.map((c) => c.id))
     setCast(new Set(template.characterIds.filter((id) => validIds.has(id))))
-    setPremise(template.premise)
-    setTimeOfDay(template.timeOfDay)
-    setTone(template.tone)
-    setRelationship(template.relationshipStatus)
+    setTitle(template.title)
+    setPreviouslyOn(template.previouslyOn)
     setMode(MODE_LABEL[template.mode])
     setPersonaId(template.personaId ? String(template.personaId) : '')
     setNarrator(template.narratorEnabled ? 'on' : 'off')
@@ -72,6 +72,17 @@ export default function SceneSetupScreen(): React.JSX.Element {
       applyTemplate(Number(params.templateId))
     }
   }, [params.templateId, templates, characters])
+
+  // A scene continued from another arrives with its cast, its next title and
+  // the earlier summary already written; the writer still begins it by hand.
+  useEffect(() => {
+    if (seeded || !prefill || !characters.length) return
+    const validIds = new Set(characters.map((c) => c.id))
+    setCast(new Set((prefill.characterIds ?? []).filter((id) => validIds.has(id))))
+    setTitle(prefill.title ?? '')
+    setPreviouslyOn(prefill.previouslyOn ?? '')
+    setSeeded(true)
+  }, [prefill, characters, seeded])
 
   const ready = cast.size > 0
 
@@ -85,8 +96,7 @@ export default function SceneSetupScreen(): React.JSX.Element {
   }
 
   function sceneTitle(): string {
-    const firstLine = premise.split('\n').find((l) => l.trim())
-    return (firstLine ?? '').trim().slice(0, 80) || 'New scene'
+    return title.trim().slice(0, 120) || 'New scene'
   }
 
   async function begin(): Promise<void> {
@@ -94,10 +104,7 @@ export default function SceneSetupScreen(): React.JSX.Element {
     const sceneId = await call('scenes:save', {
       worldId,
       title: sceneTitle(),
-      premise,
-      tone,
-      timeOfDay,
-      relationshipStatus: relationship,
+      previouslyOn,
       mode: MODE_VALUE[mode],
       narratorEnabled: narrator === 'on',
       personaId: personaId ? Number(personaId) : null,
@@ -130,10 +137,8 @@ export default function SceneSetupScreen(): React.JSX.Element {
               await call('templates:save', {
                 worldId,
                 name: name.trim(),
-                premise,
-                tone,
-                timeOfDay,
-                relationshipStatus: relationship,
+                title,
+                previouslyOn,
                 mode: MODE_VALUE[mode],
                 narratorEnabled: narrator === 'on',
                 personaId: personaId ? Number(personaId) : null,
@@ -209,14 +214,17 @@ export default function SceneSetupScreen(): React.JSX.Element {
 
       <Rule end={64} />
 
-      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 'var(--space-5)', maxWidth: 900 }}>
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 'var(--space-5)', maxWidth: 900 }}>
         <div className="block">
-          <Field label="Premise" value={premise} onChange={setPremise} lines={3} placeholder="Where does this scene begin?" />
-          <Field label="Time of day" value={timeOfDay} onChange={setTimeOfDay} />
-        </div>
-        <div className="block">
-          <Field label="Tone" value={tone} onChange={setTone} />
-          <Field label="Relationship status" value={relationship} onChange={setRelationship} />
+          <Field label="Title" value={title} onChange={setTitle} placeholder="What is this scene called?" />
+          <Field
+            label="Previously on"
+            value={previouslyOn}
+            onChange={setPreviouslyOn}
+            lines={5}
+            placeholder="Summaries of earlier scenes — where things stand as this one opens."
+          />
+          <p className="caption">Sent with every message in this scene, before the transcript.</p>
         </div>
         <div className="block">
           <Eyebrow>Mode</Eyebrow>

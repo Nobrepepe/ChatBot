@@ -6,6 +6,7 @@ import {
   type CharacterSprite,
   type LoreEntry,
   type Memory,
+  type MemoryProposal,
   type Message,
   type NoteChatMessage,
   type NoteSuggestion,
@@ -30,6 +31,7 @@ export interface FakeStore {
   scenes: Scene[]
   messages: Message[]
   memories: Memory[]
+  proposals: MemoryProposal[]
   lore: LoreEntry[]
   personas: Persona[]
   templates: SceneTemplate[]
@@ -51,7 +53,9 @@ export interface FakeApi {
   lastRequestId: number
   emit: (event: StreamEvent) => void
   chunk: (requestId: number, delta: string) => void
-  done: (requestId: number) => void
+  /** An automatic pass the turn still owes, reported before it finishes. */
+  status: (requestId: number, message: string) => void
+  done: (requestId: number, message?: string) => void
   fail: (requestId: number, message: string) => void
   /** Force a channel to reject, to exercise error paths. */
   failNext: (channel: string, message: string, code?: string) => void
@@ -61,6 +65,8 @@ export interface FakeApi {
   release: (channel: string) => void
   callsTo: (channel: string) => unknown[][]
 }
+
+const copy = <T,>(value: T): T => structuredClone(value)
 
 let nextId = 1
 export const resetIds = (): void => {
@@ -123,10 +129,7 @@ export function makeScene(over: Partial<Scene> = {}): Scene {
     worldId: 1,
     locationId: null,
     title: 'The rooftop',
-    premise: 'A storm traps everyone inside.',
-    tone: '',
-    timeOfDay: '',
-    relationshipStatus: '',
+    previouslyOn: '',
     mode: 'roleplay',
     summary: '',
     narratorEnabled: false,
@@ -134,6 +137,8 @@ export function makeScene(over: Partial<Scene> = {}): Scene {
     publicationId: null,
     displayMode: null,
     characterIds: [],
+    autoSummaryAt: 0,
+    autoMemoriesAt: 0,
     createdAt: NOW,
     updatedAt: NOW,
     ...over
@@ -180,7 +185,26 @@ export function makeMemory(over: Partial<Memory> = {}): Memory {
     type: 'canon',
     content: 'Ayame cannot swim.',
     sourceSceneId: null,
-    status: 'approved',
+    lifecycleStatus: 'canonical',
+    createdAt: NOW,
+    ...over
+  }
+}
+
+export function makeProposal(over: Partial<MemoryProposal> = {}): MemoryProposal {
+  return {
+    id: id(),
+    sceneId: 1,
+    characterId: 1,
+    characterName: 'Ayame',
+    actionType: 'create',
+    targetMemoryId: null,
+    payload: {},
+    status: 'pending',
+    lifecycleStatus: 'proposed',
+    currentContent: '',
+    proposedContent: 'Ayame promised to come back for the lantern.',
+    memoryType: 'canon',
     createdAt: NOW,
     ...over
   }
@@ -194,6 +218,7 @@ function emptyStore(): FakeStore {
     scenes: [],
     messages: [],
     memories: [],
+    proposals: [],
     lore: [],
     personas: [],
     templates: [],
@@ -232,7 +257,8 @@ export function installFakeApi(seed: Partial<FakeStore> = {}): FakeApi {
     lastRequestId: 0,
     emit: (event) => listeners.forEach((l) => l(event)),
     chunk: (requestId, delta) => api.emit({ requestId, type: 'chunk', delta }),
-    done: (requestId) => api.emit({ requestId, type: 'done' }),
+    status: (requestId, message) => api.emit({ requestId, type: 'status', message }),
+    done: (requestId, message) => api.emit({ requestId, type: 'done', message }),
     fail: (requestId, message) => api.emit({ requestId, type: 'error', message }),
     failNext: (channel, message, code = 'error') => failures.set(channel, { message, code }),
     defer: (channel) => deferred.add(channel),
@@ -319,9 +345,14 @@ export function installFakeApi(seed: Partial<FakeStore> = {}): FakeApi {
       store.personas = store.personas.filter((p) => p.id !== pid)
     },
 
-    'scenes:list': (wid: number) => store.scenes.filter((s) => s.worldId === wid),
-    'scenes:listAll': () => store.scenes,
-    'scenes:get': (sid: number) => byId(store.scenes, sid),
+    'scenes:list': (wid: number) => store.scenes.filter((s) => s.worldId === wid).map(copy),
+    'scenes:listAll': () => store.scenes.map(copy),
+    // A copy, not the stored row: the real IPC boundary serializes, and a
+    // screen that mutated the row in place would never see it change.
+    'scenes:get': (sid: number) => {
+      const scene = byId(store.scenes, sid)
+      return scene ? copy(scene) : null
+    },
     'scenes:save': (draft: any) => upsert(store.scenes, draft, (d) => makeScene(d)),
     'scenes:delete': (sid: number) => {
       store.scenes = store.scenes.filter((s) => s.id !== sid)
@@ -329,6 +360,23 @@ export function installFakeApi(seed: Partial<FakeStore> = {}): FakeApi {
     'scenes:setDisplayMode': (sid: number, mode: string | null) => {
       const scene = byId(store.scenes, sid)
       if (scene) scene.displayMode = mode as Scene['displayMode']
+    },
+    'scenes:inviteCharacters': (sid: number, ids: number[]) => {
+      const scene = byId(store.scenes, sid)
+      if (!scene) return
+      for (const cid of ids) {
+        if (scene.characterIds.includes(cid)) continue
+        scene.characterIds = [...scene.characterIds, cid]
+        const character = byId(store.characters, cid)
+        store.messages.push(
+          makeMessage({
+            sceneId: sid,
+            role: 'system-note',
+            characterId: cid,
+            content: `${character?.name ?? 'Someone'} joins the scene.`
+          })
+        )
+      }
     },
 
     'messages:list': (sid: number) =>
@@ -350,10 +398,8 @@ export function installFakeApi(seed: Partial<FakeStore> = {}): FakeApi {
         id: id(),
         worldId: d.worldId,
         name: d.name,
-        premise: d.premise ?? '',
-        tone: d.tone ?? '',
-        timeOfDay: d.timeOfDay ?? '',
-        relationshipStatus: d.relationshipStatus ?? '',
+        title: d.title ?? '',
+        previouslyOn: d.previouslyOn ?? '',
         mode: d.mode ?? 'roleplay',
         narratorEnabled: !!d.narratorEnabled,
         locationId: null,
@@ -364,15 +410,49 @@ export function installFakeApi(seed: Partial<FakeStore> = {}): FakeApi {
       store.templates = store.templates.filter((t) => t.id !== tid)
     },
 
-    'memories:list': (cid: number, options?: { status?: string }) =>
+    'memories:list': (cid: number, options?: { lifecycle?: string }) =>
       store.memories.filter(
         (m) =>
           m.characterId === cid &&
-          (!options?.status || options.status === 'any' || m.status === options.status)
+          (options?.lifecycle === 'any' ||
+            m.lifecycleStatus === (options?.lifecycle ?? 'canonical'))
       ),
     'memories:save': (draft: any) => upsert(store.memories, draft, (d) => makeMemory(d)),
     'memories:delete': (mid: number) => {
       store.memories = store.memories.filter((m) => m.id !== mid)
+    },
+
+    'memories:proposalsForScene': (sid: number) =>
+      store.proposals.filter((p) => p.sceneId === sid && p.status === 'pending'),
+    'memories:proposalsForCharacter': (cid: number) =>
+      store.proposals.filter((p) => p.characterId === cid && p.status === 'pending'),
+    'memories:approveSuggestion': (pid: number, edited: { content: string; type: string }) => {
+      const proposal = store.proposals.find((p) => p.id === pid)
+      if (!proposal) throw new Error('The proposal no longer exists.')
+      proposal.status = 'approved'
+      if (proposal.actionType === 'forget') {
+        store.memories = store.memories.filter((m) => m.id !== proposal.targetMemoryId)
+        return 0
+      }
+      const target = store.memories.find((m) => m.id === proposal.targetMemoryId)
+      if (target) {
+        target.content = edited.content
+        target.type = edited.type as Memory['type']
+        target.lifecycleStatus = 'canonical'
+        return target.id
+      }
+      const created = makeMemory({
+        characterId: proposal.characterId,
+        content: edited.content,
+        type: edited.type as Memory['type'],
+        lifecycleStatus: 'canonical'
+      })
+      store.memories.push(created)
+      return created.id
+    },
+    'memories:rejectSuggestion': (pid: number) => {
+      const proposal = store.proposals.find((p) => p.id === pid)
+      if (proposal) proposal.status = 'rejected'
     },
 
     'chat:start': (params: ChatStartParams) => {
@@ -389,7 +469,8 @@ export function installFakeApi(seed: Partial<FakeStore> = {}): FakeApi {
     'chat:cancel': () => undefined,
     'chat:summarize': () => 'A summary.',
     'chat:impersonate': () => 'I step closer.',
-    'chat:suggestMemories': () => store.memories.filter((m) => m.status === 'pending'),
+    'chat:suggestMemories': (sid: number) =>
+      store.proposals.filter((p) => p.sceneId === sid && p.status === 'pending'),
     'chat:promptDebug': () => ({
       sections: [{ label: 'System instructions', content: 'You are playing…' }],
       messages: [{ role: 'system', content: 'You are playing…' }]

@@ -6,7 +6,7 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Character, Memory, Persona, Scene, World } from '@shared/types'
+import type { Character, Memory, MemoryProposal, Persona, Scene, World } from '@shared/types'
 import { parseEmotion, parseSpeakerPrefix, stripWirePrefixes } from '@shared/wireFormat'
 import { exportsDir } from '../paths'
 import * as scenesRepo from '../db/repo/scenes'
@@ -31,6 +31,7 @@ import {
   buildSummaryPrompt
 } from '../prompt/auxPrompts'
 import { streamChat, type ChatMessage } from '../providers/openaiCompat'
+import { parseMemoryActions, parseMemoryBullets, type MemoryAction } from './memoriesService'
 
 export interface ChatContext {
   scene: Scene
@@ -110,7 +111,7 @@ export function build(sceneId: number, options: BuildOptions = {}): BuildResult 
   for (const c of ctx.characters) {
     memoriesByChar.set(
       c.id,
-      memoriesRepo.listMemories(c.id, { types: ['canon', 'relationship'], status: 'approved' })
+      memoriesRepo.listMemories(c.id, { types: ['canon', 'relationship'], lifecycle: 'canonical' })
     )
   }
 
@@ -275,40 +276,97 @@ export function exportScene(sceneId: number): string {
   return file
 }
 
-const SUGGESTION_LINE_RE = /^\s*(?:[-*•]|\d+[.)])\s+(.*\S)\s*$/
-
-function guessCharacter(line: string, characters: Character[]): Character {
-  const lowered = line.toLowerCase()
-  return characters.find((c) => lowered.includes(c.name.toLowerCase())) ?? characters[0]!
-}
-
-/** Persist each suggested fact as a pending canon memory for review. */
-export async function suggestMemories(sceneId: number, signal?: AbortSignal): Promise<Memory[]> {
+/**
+ * Reads the scene and proposes memory actions for review. Nothing becomes
+ * canon here: a create allocates a memory row marked 'proposed' so the next
+ * pass can revise that same id, and every action waits for the user.
+ */
+export async function proposeMemories(
+  sceneId: number,
+  signal?: AbortSignal
+): Promise<MemoryProposal[]> {
   const ctx = loadContext(sceneId)
   const history = messagesRepo.listMessages(sceneId)
-  const raw = await runOnce(buildMemorySuggestionPrompt(ctx.characters, ctx.scene, history), signal)
-  const saved: Memory[] = []
-  for (const line of raw.split('\n')) {
-    const m = SUGGESTION_LINE_RE.exec(line)
-    if (!m?.[1]) continue
-    const content = m[1]
-    const character = guessCharacter(content, ctx.characters)
-    const id = memoriesRepo.saveMemory({
-      characterId: character.id,
-      type: 'canon',
-      content,
-      sourceSceneId: sceneId,
-      status: 'pending'
-    })
-    saved.push({
-      id,
-      characterId: character.id,
-      type: 'canon',
-      content,
-      sourceSceneId: sceneId,
-      status: 'pending',
-      createdAt: ''
-    })
+  const characterIds = ctx.characters.map((c) => c.id)
+
+  const memoriesByChar = new Map<number, Memory[]>()
+  const ownerOf = new Map<number, number>()
+  for (const c of ctx.characters) {
+    const memories = memoriesRepo.listMemories(c.id, { lifecycle: 'any' })
+    memoriesByChar.set(
+      c.id,
+      memories.filter((m) => m.lifecycleStatus === 'canonical')
+    )
+    for (const m of memories) ownerOf.set(m.id, c.id)
   }
-  return saved
+
+  const raw = await runOnce(
+    buildMemorySuggestionPrompt({
+      characters: ctx.characters,
+      scene: ctx.scene,
+      history,
+      memoriesByChar,
+      ledger: memoriesRepo.listCastProposalLedger(characterIds)
+    }),
+    signal
+  )
+
+  const memoryIds = memoriesRepo.listProposableMemoryIds(characterIds)
+  let { actions } = parseMemoryActions(raw, { memoryIds, ownerOf, characters: ctx.characters })
+  if (actions.length === 0) actions = parseMemoryBullets(raw, ctx.characters)
+  actions = actions.filter((action) => !alreadySaid(action, memoriesByChar))
+
+  const saved: number[] = []
+  for (const action of actions.slice(0, MAX_MEMORY_ACTIONS)) {
+    try {
+      saved.push(
+        memoriesRepo.saveMemorySuggestion({
+          sceneId,
+          characterId: action.characterId,
+          actionType: action.actionType,
+          targetMemoryId: action.targetMemoryId,
+          payload: action.payload
+        })
+      )
+    } catch {
+      // A target that vanished between the prompt and the answer is not worth
+      // failing the whole pass over; the rest of the actions still stand.
+    }
+  }
+  if (!saved.length) return []
+  const bySaved = new Set(saved)
+  return memoriesRepo.listSceneProposals(sceneId).filter((p) => bySaved.has(p.id))
 }
+
+/**
+ * The prompt asks for at most six actions; this is the hard ceiling, so a
+ * model that ignores the request still cannot rewrite a character wholesale.
+ */
+const MAX_MEMORY_ACTIONS = 8
+
+const normalize = (text: string): string => text.trim().toLowerCase().replace(/\s+/g, ' ')
+
+/**
+ * An action that would change nothing: a fact the character already carries
+ * word for word, or a rewrite into the words already there. Models repeat
+ * themselves across passes, and with automatic memories nobody is there to
+ * catch it, so the same fact would otherwise accumulate a copy every few
+ * messages.
+ */
+function alreadySaid(action: MemoryAction, memoriesByChar: Map<number, Memory[]>): boolean {
+  if (action.actionType === 'forget') return false
+  const content = normalize(String(action.payload['content'] ?? ''))
+  if (!content) return true
+  const held = memoriesByChar.get(action.characterId) ?? []
+
+  if (action.actionType === 'replace') {
+    const target = held.find((m) => m.id === action.targetMemoryId)
+    return !!target && normalize(target.content) === content
+  }
+  if (held.some((m) => normalize(m.content) === content)) return true
+  return memoriesRepo
+    .listCharacterProposals(action.characterId)
+    .some((p) => p.actionType === 'create' && normalize(p.proposedContent) === content)
+}
+
+export type { MemoryAction }

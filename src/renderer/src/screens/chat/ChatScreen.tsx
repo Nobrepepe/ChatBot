@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
@@ -9,7 +9,7 @@ import { nextInSeries } from '@shared/titleSeries'
 import { Screen } from '../../components/Screen'
 import { Eyebrow, FadingBar, PulseDot, Rule, TextAction, VRule } from '../../components/primitives'
 import { Field } from '../../components/fields'
-import { Art } from '../../components/art'
+import { Art, ArtPlaceholder } from '../../components/art'
 import { Confirm, useOverlay } from '../../components/overlay'
 import { useSnack } from '../../components/snack'
 import { ApiError, call } from '../../lib/api'
@@ -84,6 +84,8 @@ export default function ChatScreen(): React.JSX.Element {
   const [draft, setDraft] = useState('')
   const [responderId, setResponderId] = useState<number | null>(null)
   const responder = cast.find((c) => c.id === responderId) ?? cast[0]
+  const [castOpen, setCastOpen] = useState(false)
+  const closeCast = useCallback(() => setCastOpen(false), [])
 
   // Per-scene display mode with the global setting as fallback.
   const displayMode = scene?.displayMode ?? (settingsQuery.data?.displayMode === 'vn' ? 'vn' : 'chat')
@@ -432,7 +434,7 @@ export default function ChatScreen(): React.JSX.Element {
                 snack((err as Error).message, true)
               }
             }}
-            sub="The scene becomes a group scene; choose who answers with Choose responder."
+            sub="The scene becomes a group scene; “Next: …” at the top then chooses who answers."
           >
             {picked.size > 1 ? 'Invite them →' : 'Invite →'}
           </TextAction>
@@ -442,67 +444,13 @@ export default function ChatScreen(): React.JSX.Element {
   }
 
   /**
-   * Picking and confirming are separate steps, and the picker owns the
-   * selection: the overlay body is built once, so reading the screen's
-   * responder here would leave the confirm action naming a stale character.
+   * The direct reply: the chosen character answers the turn that is already
+   * there, without a user message. Choosing in the rail does none of this.
    */
-  function ResponderPicker({
-    initialId,
-    close
-  }: {
-    initialId: number | null
-    close: () => void
-  }): React.JSX.Element {
-    const [picked, setPicked] = useState<number | null>(initialId)
-    const chosenCharacter = cast.find((c) => c.id === picked) ?? cast[0]
-    return (
-      <div className="block">
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 'var(--space-4)' }}>
-          {cast.map((c) => {
-            const chosen = chosenCharacter?.id === c.id
-            const art = c.tileImagePath || c.portraitPath
-            return (
-              <button
-                key={c.id}
-                type="button"
-                className="row-line"
-                style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}
-                onClick={() => setPicked(c.id)}
-              >
-                {art ? (
-                  <Art path={art} treatment="alpha" ghost={!chosen} style={{ width: '100%', aspectRatio: '16/9', objectFit: 'contain' }} />
-                ) : null}
-                <span className="row-title" style={{ fontSize: 'var(--size-title)' }}>{c.name}</span>
-                <span className="caption" style={chosen ? { color: 'var(--accent)' } : undefined}>
-                  {chosen ? 'responds next' : 'waiting'}
-                </span>
-              </button>
-            )
-          })}
-        </div>
-        <div className="overlay-actions">
-          <TextAction
-            onClick={async () => {
-              const id = chosenCharacter?.id ?? null
-              setResponderId(id)
-              close()
-              await stream.start({ kind: 'reply', sceneId, responderId: id, respondToLatest: true })
-            }}
-            sub="They answer the previous reply directly, without a user turn."
-          >
-            Respond as {chosenCharacter?.name} →
-          </TextAction>
-        </div>
-      </div>
-    )
-  }
-
-  function chooseResponder(): void {
-    overlay.open({
-      eyebrow: 'Cast',
-      title: 'Who responds next?',
-      render: (close) => <ResponderPicker initialId={responder?.id ?? null} close={close} />
-    })
+  async function answerNow(): Promise<void> {
+    if (!canGenerate) return
+    setCastOpen(false)
+    await stream.start({ kind: 'reply', sceneId, responderId: responder?.id, respondToLatest: true })
   }
 
   if (!scene) return <Screen back={{ label: 'Worlds', to: '/' }}>{null}</Screen>
@@ -516,9 +464,24 @@ export default function ChatScreen(): React.JSX.Element {
     <Screen
       back={{ label: world?.name ?? 'World', to: `/world/${scene.worldId}/sessions` }}
       rightActions={multi ? (
-        <TextAction kind="secondary" onClick={chooseResponder}>
-          Choose responder
+        <TextAction
+          kind="secondary"
+          onClick={() => setCastOpen((open) => !open)}
+          title="Who answers next, and who can answer now"
+        >
+          Next: {responder?.name ?? 'nobody'}
         </TextAction>
+      ) : null}
+      rail={multi && castOpen ? (
+        <ResponderDrawer
+          cast={cast}
+          responder={responder}
+          onChoose={setResponderId}
+          onAnswerNow={answerNow}
+          canGenerate={canGenerate}
+          repliesTo={lastCharacterMessage ? speakerFor(lastCharacterMessage) : null}
+          onClose={closeCast}
+        />
       ) : null}
       backdrop={
         backdropArt ? (
@@ -720,6 +683,118 @@ export default function ChatScreen(): React.JSX.Element {
         />
       </div>
     </Screen>
+  )
+}
+
+/**
+ * The cast rail. Two actions, deliberately apart: choosing a character only
+ * says who takes the next normal turn — it generates nothing — while the one
+ * amber action makes that character answer the transcript right now. It sits
+ * beside the conversation rather than over it, because choosing who speaks
+ * next means reading what was just said.
+ */
+function ResponderDrawer({
+  cast,
+  responder,
+  onChoose,
+  onAnswerNow,
+  canGenerate,
+  repliesTo,
+  onClose
+}: {
+  cast: Character[]
+  responder: Character | undefined
+  onChoose: (id: number) => void
+  onAnswerNow: () => void
+  canGenerate: boolean
+  /** Whose turn a direct reply would answer, if anyone has spoken yet. */
+  repliesTo: string | null
+  onClose: () => void
+}): React.JSX.Element {
+  // Bubble phase, so an overlay opened over the rail still takes Escape first.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <>
+      <div className="rail-head">
+        <Eyebrow>Cast</Eyebrow>
+        <TextAction kind="secondary" onClick={onClose}>
+          Hide →
+        </TextAction>
+      </div>
+
+      <div className="block" style={{ gap: 'var(--space-2)' }}>
+        <h2 className="display" style={{ fontSize: 'var(--size-display-m)' }}>
+          {responder ? `${responder.name} will answer next.` : 'Nobody is chosen yet.'}
+        </h2>
+        <p className="caption">
+          Choose who takes the next normal turn after you send a message.
+        </p>
+      </div>
+
+      <div className="rail-scroll">
+        {cast.map((c) => {
+          const chosen = responder?.id === c.id
+          const art = c.tileImagePath || c.portraitPath
+          return (
+            <div key={c.id}>
+              <button
+                type="button"
+                className="row-line"
+                aria-pressed={chosen}
+                onClick={() => onChoose(c.id)}
+              >
+                {art ? (
+                  <Art
+                    path={art}
+                    treatment="alpha"
+                    ghost={!chosen}
+                    style={{ flex: '0 0 78px', width: 78, aspectRatio: '4/3' }}
+                  />
+                ) : (
+                  <ArtPlaceholder label="NO PORTRAIT" aspect="4/3" style={{ flex: '0 0 78px', width: 78 }} />
+                )}
+                <span className="block" style={{ gap: 2 }}>
+                  <span className="row-title" style={{ fontSize: 'var(--size-display-s)' }}>
+                    {c.name}
+                  </span>
+                  <span className="caption" style={chosen ? { color: 'var(--accent)' } : undefined}>
+                    {chosen ? 'answers the next user turn' : 'waiting'}
+                  </span>
+                </span>
+              </button>
+              {chosen ? <Rule accent end={62} /> : null}
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="block" style={{ gap: 'var(--space-3)' }}>
+        <Rule end={70} />
+        <Eyebrow>Direct reply</Eyebrow>
+        <TextAction
+          onClick={onAnswerNow}
+          disabled={!canGenerate || !responder}
+          sub={
+            repliesTo
+              ? `Replies to ${repliesTo}’s latest turn without adding a user message.`
+              : 'Opens the scene without waiting for a user message.'
+          }
+        >
+          Let {responder?.name ?? 'them'} answer now →
+        </TextAction>
+        <p className="caption">Changing the selection does not generate a reply.</p>
+        <p className="caption" style={{ color: 'var(--faint)' }}>
+          Escape hides the cast.
+        </p>
+      </div>
+    </>
   )
 }
 

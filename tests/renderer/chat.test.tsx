@@ -202,26 +202,49 @@ describe('a multi-character scene', () => {
     expect(screen.queryByText(/\{Kaguya\}/)).not.toBeInTheDocument()
   })
 
+  it('chooses the next responder in the rail without generating anything', async () => {
+    renderRoute('/chat/5')
+    await userEvent.click(await screen.findByRole('button', { name: 'Next: Ayame' }))
+    await userEvent.click(await screen.findByRole('button', { name: /Kaguya waiting/ }))
+
+    // Selection alone is not a generation; it only renames the next turn.
+    expect(api.callsTo('chat:start')).toHaveLength(0)
+    expect(screen.getByRole('button', { name: /Kaguya answers the next user turn/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Next: Kaguya' })).toBeInTheDocument()
+
+    await userEvent.type(screen.getByPlaceholderText('Say something'), 'who is there?')
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() => expect(api.callsTo('chat:start')).toHaveLength(1))
+    expect(api.callsTo('chat:start')[0]![0]).toMatchObject({ responderId: 11 })
+  })
+
   it('lets a character answer the previous reply directly', async () => {
     renderRoute('/chat/5')
-    await userEvent.click(await screen.findByRole('button', { name: /Choose responder/ }))
-    // Picking marks the character without dismissing the overlay, so the
-    // confirm action names whoever was just chosen.
+    await userEvent.click(await screen.findByRole('button', { name: 'Next: Ayame' }))
     await userEvent.click(await screen.findByRole('button', { name: /Kaguya waiting/ }))
-    expect(screen.getByRole('button', { name: /Kaguya responds next/ })).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: /Respond as Kaguya/ }))
+    await userEvent.click(screen.getByRole('button', { name: /Let Kaguya answer now/ }))
 
     await waitFor(() => expect(api.callsTo('chat:start')).toHaveLength(1))
     const [params] = api.callsTo('chat:start')[0] as [any]
     expect(params).toMatchObject({ kind: 'reply', responderId: 11, respondToLatest: true })
     expect(params.userMessage).toBeUndefined()
+    // Generation begins with the transcript back at full width.
+    expect(screen.queryByRole('button', { name: /Let Kaguya answer now/ })).not.toBeInTheDocument()
   })
 
-  it('offers no responder picker for a single character', async () => {
+  it('hides the rail on Escape', async () => {
+    renderRoute('/chat/5')
+    await userEvent.click(await screen.findByRole('button', { name: 'Next: Ayame' }))
+    expect(await screen.findByText('Ayame will answer next.')).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByText('Ayame will answer next.')).not.toBeInTheDocument()
+  })
+
+  it('offers no responder rail for a single character', async () => {
     seed({ characterIds: [10] })
     renderRoute('/chat/5')
     await screen.findByPlaceholderText('Say something')
-    expect(screen.queryByRole('button', { name: /Choose responder/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Next:/ })).not.toBeInTheDocument()
   })
 })
 
@@ -430,7 +453,7 @@ describe('inviting a character', () => {
     await waitFor(() => expect(api.callsTo('scenes:inviteCharacters')).toEqual([[5, [11]]]))
     expect(await screen.findByText('Kaguya joins the scene.')).toBeInTheDocument()
     // A second voice means the scene now needs to be told who answers.
-    expect(await screen.findByRole('button', { name: 'Choose responder' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Next: Ayame' })).toBeInTheDocument()
   })
 
   it('will not invite nobody', async () => {

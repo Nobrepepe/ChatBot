@@ -17,6 +17,17 @@
   );
 }
 
+/* The same hairline in the accent, for the one selected thing in a list. */
+.rule--accent {
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    color-mix(in srgb, var(--accent) 60%, transparent) 6%,
+    color-mix(in srgb, var(--accent) 60%, transparent) var(--rule-end),
+    transparent 100%
+  );
+}
+
 .vrule {
   --rule-end: 85%;
   width: 1px;
@@ -472,6 +483,79 @@
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
+}
+
+/* ---- Right rail ---- */
+
+/* A contextual drawer, not an overlay: it never dims or blurs the page, and
+   the page gives up the width instead of being covered. Same charcoal floor,
+   no panel — the left edge is implied by a fading rule and by the floor itself
+   fading in, so nothing draws a rectangle. */
+.screen[data-rail] {
+  /* Declared here, not on .rail: the page has to read the width to give it up. */
+  --rail-w: clamp(360px, 27vw, 430px);
+  padding-right: calc(var(--rail-w) + var(--space-5));
+}
+.rail {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--rail-w);
+  z-index: 30;
+  padding: var(--space-4) var(--gutter) var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  background: linear-gradient(to right, transparent 0%, var(--bg) 8%, var(--bg) 100%);
+  animation: rail-in var(--fade-route) var(--ease-out);
+}
+.rail::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--line) 14%,
+    var(--line) 82%,
+    transparent 100%
+  );
+}
+@keyframes rail-in {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+/* The cast scrolls on its own so the action below it stays anchored. */
+.rail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.rail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail {
+    animation: none;
+  }
+}
+/* Too narrow to reflow into: the rail takes the screen instead of squeezing it. */
+@media (max-width: 900px) {
+  .screen[data-rail] {
+    --rail-w: min(430px, 100vw);
+    padding-right: var(--gutter);
+  }
 }
 
 /* ---- Blocks ---- */

@@ -4,8 +4,13 @@ export function Eyebrow({ children }: { children: ReactNode }): React.JSX.Elemen
   return <p className="eyebrow">{children}</p>
 }
 
-export function Rule({ end = 74 }: { end?: number }): React.JSX.Element {
-  return <hr className="rule" style={{ ['--rule-end' as string]: `${end}%` }} />
+export function Rule({ end = 74, accent }: { end?: number; accent?: boolean }): React.JSX.Element {
+  return (
+    <hr
+      className={accent ? 'rule rule--accent' : 'rule'}
+      style={{ ['--rule-end' as string]: `${end}%` }}
+    />
+  )
 }
 
 export function VRule({ height }: { height?: number | string }): React.JSX.Element {

@@ -98,6 +98,60 @@ describe('generation settings', () => {
   })
 })
 
+describe('the automatic passes', () => {
+  const open = async (): Promise<void> => {
+    renderRoute('/settings')
+    await userEvent.click(await screen.findByRole('tab', { name: 'Automatic' }))
+  }
+
+  it('says up front that this costs a second request and slows replies down', async () => {
+    await open()
+    expect(
+      await screen.findByText(/Each pass is a second full request, sent after the reply/)
+    ).toBeInTheDocument()
+    expect(screen.getByText(/replies take noticeably longer/)).toBeInTheDocument()
+  })
+
+  it('starts with both passes off and no interval to answer for', async () => {
+    await open()
+    const off = await screen.findAllByRole('tab', { name: 'Only when I ask', selected: true })
+    expect(off).toHaveLength(2)
+    expect(screen.queryByLabelText('Every … messages')).not.toBeInTheDocument()
+  })
+
+  it('turns the summary pass on with an interval and saves it', async () => {
+    await open()
+    await userEvent.click(await screen.findByRole('tab', { name: 'Summarize on its own' }))
+    const every = screen.getByLabelText('Every … messages')
+    await userEvent.clear(every)
+    await userEvent.type(every, '6')
+    await userEvent.click(screen.getByRole('button', { name: /Save settings/ }))
+
+    await waitFor(() => expect(api.callsTo('settings:save')).toHaveLength(1))
+    const [values] = api.callsTo('settings:save')[0] as [any]
+    expect(values).toMatchObject({ autoSummary: '1', autoSummaryEvery: '6' })
+  })
+
+  it('says that automatic memories are approved without review', async () => {
+    await open()
+    await userEvent.click(await screen.findByRole('tab', { name: 'Keep memories on its own' }))
+    expect(
+      screen.getByText(/approved for you rather than waiting for review/)
+    ).toBeInTheDocument()
+  })
+
+  it('refuses an interval that is not a number', async () => {
+    await open()
+    await userEvent.click(await screen.findByRole('tab', { name: 'Summarize on its own' }))
+    const every = screen.getByLabelText('Every … messages')
+    await userEvent.clear(every)
+    await userEvent.type(every, 'soon')
+    await userEvent.click(screen.getByRole('button', { name: /Save settings/ }))
+    expect(await screen.findByText('Summary interval needs a number.')).toBeInTheDocument()
+    expect(api.callsTo('settings:save')).toHaveLength(0)
+  })
+})
+
 describe('appearance settings', () => {
   it('applies reduced motion to the document as soon as it is chosen', async () => {
     renderRoute('/settings')

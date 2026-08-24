@@ -39,7 +39,7 @@ beforeEach(() => {
   sceneId = scenesRepo.saveScene({
     worldId,
     title: 'The rooftop',
-    premise: 'A storm.',
+    previouslyOn: 'A storm.',
     mode: 'roleplay',
     characterIds: [liraelId, morganaId]
   })
@@ -171,7 +171,7 @@ describe('stopping a one-shot', () => {
 
     mockedStream.mockClear()
     answerWith('- Morgana is afraid.')
-    await chat.suggestMemories(sceneId, controller.signal)
+    await chat.proposeMemories(sceneId, controller.signal)
     expect(mockedStream.mock.calls[0]![2]).toBe(controller.signal)
   })
 
@@ -184,13 +184,14 @@ describe('stopping a one-shot', () => {
     expect(scenesRepo.getScene(sceneId)!.summary).toBe('')
   })
 
-  it('saves no pending memories when the generation is aborted', async () => {
+  it('proposes nothing when the generation is aborted', async () => {
     mockedStream.mockImplementation(async function* () {
       throw Object.assign(new Error('aborted'), { name: 'AbortError' })
       yield ''
     })
-    await expect(chat.suggestMemories(sceneId, new AbortController().signal)).rejects.toThrow('aborted')
-    expect(memoriesRepo.listMemories(morganaId, { status: 'pending' })).toHaveLength(0)
+    await expect(chat.proposeMemories(sceneId, new AbortController().signal)).rejects.toThrow('aborted')
+    expect(memoriesRepo.listCharacterProposals(morganaId)).toHaveLength(0)
+    expect(memoriesRepo.listMemories(morganaId, { lifecycle: 'any' })).toHaveLength(0)
   })
 })
 
@@ -213,16 +214,171 @@ describe('exportScene', () => {
   })
 })
 
-describe('suggestMemories', () => {
-  it('persists each bullet as a pending canon memory attributed by name', async () => {
+describe('proposeMemories', () => {
+  function action(payload: Record<string, unknown>): string {
+    return '```memory_action\n' + JSON.stringify(payload) + '\n```'
+  }
+
+  it('proposes a create as a memory that is not canon until approved', async () => {
+    answerWith(
+      'Two things changed.\n\n' +
+        action({
+          type: 'create',
+          character_id: morganaId,
+          memory_type: 'canon',
+          content: 'Morgana admitted she was afraid.'
+        })
+    )
+    const proposals = await chat.proposeMemories(sceneId)
+    expect(proposals).toHaveLength(1)
+    expect(proposals[0]).toMatchObject({
+      actionType: 'create',
+      characterId: morganaId,
+      characterName: 'Morgana',
+      proposedContent: 'Morgana admitted she was afraid.',
+      status: 'pending'
+    })
+    // The row exists so the next pass can revise this same id, but it is not
+    // sent with any prompt yet.
+    expect(memoriesRepo.listMemories(morganaId)).toHaveLength(0)
+    expect(memoriesRepo.listMemories(morganaId, { lifecycle: 'proposed' })).toHaveLength(1)
+  })
+
+  it('rewrites an existing memory instead of stacking a second one', async () => {
+    const existing = memoriesRepo.saveMemory({
+      characterId: morganaId,
+      type: 'relationship',
+      content: 'Morgana barely tolerates the user.'
+    })
+    answerWith(
+      action({
+        type: 'replace',
+        memory_id: existing,
+        memory_type: 'relationship',
+        content: 'Morgana trusts the user now.'
+      })
+    )
+    const [proposal] = await chat.proposeMemories(sceneId)
+    expect(proposal).toMatchObject({
+      actionType: 'replace',
+      targetMemoryId: existing,
+      currentContent: 'Morgana barely tolerates the user.',
+      proposedContent: 'Morgana trusts the user now.'
+    })
+    // Until approved the old memory is still the one being sent.
+    expect(memoriesRepo.listMemories(morganaId)[0]!.content).toBe(
+      'Morgana barely tolerates the user.'
+    )
+
+    memoriesRepo.approveMemorySuggestion(proposal!.id, proposal!.proposedContent, 'relationship')
+    const after = memoriesRepo.listMemories(morganaId)
+    expect(after).toHaveLength(1)
+    expect(after[0]!.content).toBe('Morgana trusts the user now.')
+  })
+
+  it('proposes forgetting a memory that has become false', async () => {
+    const existing = memoriesRepo.saveMemory({
+      characterId: liraelId,
+      type: 'canon',
+      content: 'Lirael cannot swim.'
+    })
+    answerWith(action({ type: 'forget', memory_id: existing, reason: 'She learned this spring.' }))
+    const [proposal] = await chat.proposeMemories(sceneId)
+    expect(proposal).toMatchObject({ actionType: 'forget', targetMemoryId: existing })
+    expect(memoriesRepo.listMemories(liraelId)).toHaveLength(1)
+
+    memoriesRepo.approveMemorySuggestion(proposal!.id, '', 'canon')
+    expect(memoriesRepo.listMemories(liraelId, { lifecycle: 'any' })).toHaveLength(0)
+  })
+
+  it('refuses an id the character does not own', async () => {
+    answerWith(action({ type: 'replace', memory_id: 9999, content: 'Invented.' }))
+    expect(await chat.proposeMemories(sceneId)).toHaveLength(0)
+  })
+
+  it('shows the model what it already proposed, so a second pass revises it', async () => {
+    answerWith(
+      action({
+        type: 'create',
+        character_id: morganaId,
+        memory_type: 'canon',
+        content: 'Morgana admitted she was afraid.'
+      })
+    )
+    const [first] = await chat.proposeMemories(sceneId)
+
+    let seen = ''
+    mockedStream.mockImplementation(async function* (messages) {
+      seen = messages[0]!.content
+      yield action({
+        type: 'replace',
+        memory_id: first!.targetMemoryId,
+        memory_type: 'canon',
+        content: 'Morgana admitted she was afraid of the water.'
+      })
+    })
+    const [second] = await chat.proposeMemories(sceneId)
+    expect(seen).toContain('Proposals still awaiting the user')
+    expect(second!.actionType).toBe('replace')
+    // The earlier proposal steps aside rather than waiting beside its revision.
+    expect(memoriesRepo.listCharacterProposals(morganaId)).toHaveLength(1)
+  })
+
+  it('does not propose a fact the character already carries word for word', async () => {
+    memoriesRepo.saveMemory({
+      characterId: morganaId,
+      type: 'canon',
+      content: 'Morgana admitted she was afraid.'
+    })
+    answerWith(
+      action({
+        type: 'create',
+        character_id: morganaId,
+        memory_type: 'canon',
+        content: '  morgana  admitted she was AFRAID. '
+      })
+    )
+    expect(await chat.proposeMemories(sceneId)).toHaveLength(0)
+    expect(memoriesRepo.listMemories(morganaId, { lifecycle: 'any' })).toHaveLength(1)
+  })
+
+  it('does not propose a rewrite into the words already there', async () => {
+    const existing = memoriesRepo.saveMemory({
+      characterId: morganaId,
+      type: 'relationship',
+      content: 'Morgana trusts the user now.'
+    })
+    answerWith(
+      action({
+        type: 'replace',
+        memory_id: existing,
+        memory_type: 'relationship',
+        content: 'Morgana trusts the user now.'
+      })
+    )
+    expect(await chat.proposeMemories(sceneId)).toHaveLength(0)
+  })
+
+  it('does not propose the same new fact twice across passes', async () => {
+    answerWith(
+      action({
+        type: 'create',
+        character_id: morganaId,
+        memory_type: 'canon',
+        content: 'Morgana admitted she was afraid.'
+      })
+    )
+    expect(await chat.proposeMemories(sceneId)).toHaveLength(1)
+    expect(await chat.proposeMemories(sceneId)).toHaveLength(0)
+    expect(memoriesRepo.listCharacterProposals(morganaId)).toHaveLength(1)
+  })
+
+  it('still reads a plain bullet list from a model that ignores the contract', async () => {
     answerWith('- Morgana admitted she was afraid.\n- The rooftop is Lirael\'s refuge.\nnot a bullet')
-    const saved = await chat.suggestMemories(sceneId)
-    expect(saved).toHaveLength(2)
-    expect(saved[0]!.characterId).toBe(morganaId)
-    expect(saved[1]!.characterId).toBe(liraelId)
-    const pending = memoriesRepo.listMemories(morganaId, { status: 'pending' })
-    expect(pending).toHaveLength(1)
-    expect(pending[0]!.status).toBe('pending')
-    expect(memoriesRepo.listMemories(morganaId, { status: 'approved' })).toHaveLength(0)
+    const proposals = await chat.proposeMemories(sceneId)
+    expect(proposals).toHaveLength(2)
+    expect(proposals[0]!.characterId).toBe(morganaId)
+    expect(proposals[1]!.characterId).toBe(liraelId)
+    expect(proposals.every((p) => p.actionType === 'create')).toBe(true)
   })
 })

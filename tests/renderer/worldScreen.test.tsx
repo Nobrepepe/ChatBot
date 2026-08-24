@@ -189,15 +189,28 @@ describe('the sessions tab', () => {
     ).toBeInTheDocument()
   })
 
+  it('shows where each scene stands, from its summary', async () => {
+    api.store.scenes.push(
+      makeScene({
+        id: 6,
+        worldId: 1,
+        title: 'The pier',
+        summary: '- They argued about the boat.\n- Nothing was settled.'
+      })
+    )
+    renderRoute('/world/1/sessions')
+    expect(
+      await screen.findByText('They argued about the boat. · Nothing was settled.')
+    ).toBeInTheDocument()
+  })
+
   it('offers saved setups as a way in', async () => {
     api.store.templates.push({
       id: 30,
       worldId: 1,
       name: 'Rooftop opener',
-      premise: '',
-      tone: '',
-      timeOfDay: '',
-      relationshipStatus: '',
+      title: '',
+      previouslyOn: '',
       mode: 'roleplay',
       narratorEnabled: false,
       locationId: null,

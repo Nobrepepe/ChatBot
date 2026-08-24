@@ -6,10 +6,8 @@ interface TemplateRow {
   id: number
   world_id: number
   name: string
-  premise: string
-  tone: string
-  time_of_day: string
-  relationship_status: string
+  title: string
+  previously_on: string
   mode: string
   narrator_enabled: number
   location_id: number | null
@@ -28,10 +26,8 @@ function mapTemplate(r: TemplateRow): SceneTemplate {
     id: r.id,
     worldId: r.world_id,
     name: r.name,
-    premise: r.premise,
-    tone: r.tone,
-    timeOfDay: r.time_of_day,
-    relationshipStatus: r.relationship_status,
+    title: r.title,
+    previouslyOn: r.previously_on,
     mode: r.mode as SceneMode,
     narratorEnabled: toBool(r.narrator_enabled),
     locationId: r.location_id,
@@ -60,15 +56,13 @@ export function saveSceneTemplate(draft: SceneTemplateDraft): number {
     let id: number
     if (draft.id) {
       db.prepare(
-        `UPDATE scene_templates SET name = ?, premise = ?, tone = ?, time_of_day = ?,
-         relationship_status = ?, mode = ?, narrator_enabled = ?, location_id = ?, persona_id = ?
+        `UPDATE scene_templates SET name = ?, title = ?, previously_on = ?, mode = ?,
+         narrator_enabled = ?, location_id = ?, persona_id = ?
          WHERE id = ?`
       ).run(
         draft.name,
-        draft.premise ?? '',
-        draft.tone ?? '',
-        draft.timeOfDay ?? '',
-        draft.relationshipStatus ?? '',
+        draft.title ?? '',
+        draft.previouslyOn ?? '',
         draft.mode ?? 'roleplay',
         draft.narratorEnabled ? 1 : 0,
         draft.locationId ?? null,
@@ -79,17 +73,15 @@ export function saveSceneTemplate(draft: SceneTemplateDraft): number {
     } else {
       const info = db
         .prepare(
-          `INSERT INTO scene_templates (world_id, name, premise, tone, time_of_day,
-           relationship_status, mode, narrator_enabled, location_id, persona_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO scene_templates (world_id, name, title, previously_on,
+           mode, narrator_enabled, location_id, persona_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           draft.worldId,
           draft.name,
-          draft.premise ?? '',
-          draft.tone ?? '',
-          draft.timeOfDay ?? '',
-          draft.relationshipStatus ?? '',
+          draft.title ?? '',
+          draft.previouslyOn ?? '',
           draft.mode ?? 'roleplay',
           draft.narratorEnabled ? 1 : 0,
           draft.locationId ?? null,

@@ -39,10 +39,71 @@ describe('database schema', () => {
       'world_note_prompt_usage',
       'world_note_suggestions',
       'world_notes_workspace_sessions',
+      'memory_suggestions',
       'settings'
     ]) {
       expect(tables).toContain(expected)
     }
+  })
+
+  it('carries a version 1 database forward without losing what it held', async () => {
+    const { default: Database } = await import('better-sqlite3')
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const init = readFileSync(
+      fileURLToPath(new URL('../../src/main/db/migrations/001_init.sql', import.meta.url)),
+      'utf8'
+    )
+    const db = new Database(':memory:')
+    db.exec(init)
+    db.pragma('user_version = 1')
+
+    const ts = '2026-01-01T00:00:00.000Z'
+    db.prepare("INSERT INTO worlds (name, created_at, updated_at) VALUES ('Eden', ?, ?)").run(ts, ts)
+    db.prepare(
+      "INSERT INTO characters (world_id, name, created_at, updated_at) VALUES (1, 'Lirael', ?, ?)"
+    ).run(ts, ts)
+    db.prepare(
+      `INSERT INTO scenes (world_id, title, premise, tone, time_of_day, relationship_status,
+       created_at, updated_at) VALUES (1, ?, ?, 'Tense', 'Night', 'Wary', ?, ?)`
+    ).run('The rooftop', 'A storm traps everyone inside.', ts, ts)
+    db.prepare(
+      `INSERT INTO scenes (world_id, title, premise, created_at, updated_at)
+       VALUES (1, '', 'Untitled but written.', ?, ?)`
+    ).run(ts, ts)
+    db.prepare(
+      `INSERT INTO memories (character_id, type, content, status, created_at)
+       VALUES (1, 'canon', 'Lirael cannot swim.', 'approved', ?),
+              (1, 'canon', 'Lirael is afraid of the water.', 'pending', ?)`
+    ).run(ts, ts)
+
+    migrate(db)
+    expect(db.pragma('user_version', { simple: true })).toBe(2)
+
+    // A premise that was not already the title survives as the opening context.
+    const scenes = db.prepare('SELECT title, previously_on FROM scenes ORDER BY id').all() as {
+      title: string
+      previously_on: string
+    }[]
+    expect(scenes[0]).toEqual({
+      title: 'The rooftop',
+      previously_on: 'A storm traps everyone inside.'
+    })
+    // A scene with no title of its own is named by its premise instead.
+    expect(scenes[1]!.title).toBe('Untitled but written.')
+
+    const memories = db
+      .prepare('SELECT content, lifecycle_status FROM memories ORDER BY id')
+      .all() as { content: string; lifecycle_status: string }[]
+    expect(memories.map((m) => m.lifecycle_status)).toEqual(['canonical', 'proposed'])
+
+    // Nothing that was waiting for review is stranded outside the new flow.
+    const proposals = db
+      .prepare('SELECT action_type, target_memory_id, status FROM memory_suggestions')
+      .all() as { action_type: string; target_memory_id: number; status: string }[]
+    expect(proposals).toEqual([{ action_type: 'create', target_memory_id: 2, status: 'pending' }])
+
+    db.close()
   })
 
   it('is idempotent — migrating twice is a no-op', () => {

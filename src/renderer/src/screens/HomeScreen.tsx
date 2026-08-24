@@ -3,6 +3,7 @@ import { Screen } from '../components/Screen'
 import { Eyebrow, FadingBar, HeroNumeral, Rule, TextAction } from '../components/primitives'
 import { Art, ArtPlaceholder } from '../components/art'
 import { useIpcQuery } from '../lib/queries'
+import { summaryLine } from '../lib/summaryLine'
 
 function relativeDate(iso: string): string {
   const days = Math.floor((Date.now() - Date.parse(iso)) / 86_400_000)
@@ -21,6 +22,20 @@ export default function HomeScreen(): React.JSX.Element {
   const latest = (scenes.data ?? [])[0]
   const latestWorld = latest ? list.find((w) => w.id === latest.worldId) : undefined
   const messageCount = useIpcQuery('messages:count', latest?.id ?? -1)
+  const latestMessages = useIpcQuery('messages:list', latest?.id ?? -1)
+  const latestCast = useIpcQuery('characters:list', latest?.worldId ?? -1)
+
+  // Whoever spoke last is who the scene is waiting on; before anyone has
+  // spoken it is the first of the cast. Named in the line, never drawn — the
+  // home screen's art is the world.
+  const activeCharacter = (() => {
+    if (!latest) return undefined
+    const lastSpeaker = [...(latestMessages.data ?? [])]
+      .reverse()
+      .find((m) => m.role === 'character')?.characterId
+    const id = lastSpeaker ?? latest.characterIds[0]
+    return (latestCast.data ?? []).find((c) => c.id === id)
+  })()
 
   const historyLimit = Math.max(1, Number(settings.data?.historyLimit ?? 30) || 30)
   const total = latest ? (messageCount.data ?? 0) : 0
@@ -58,8 +73,15 @@ export default function HomeScreen(): React.JSX.Element {
           </h1>
           <p className="body-text" style={{ maxWidth: 520 }}>
             {latest.title || 'An untitled scene'}, last touched{' '}
-            {relativeDate(latest.updatedAt || latest.createdAt)}.
+            {relativeDate(latest.updatedAt || latest.createdAt)}
+            {activeCharacter ? `, with ${activeCharacter.name}` : ''}.
           </p>
+          {latest.summary.trim() ? (
+            <div className="block" style={{ maxWidth: 560, gap: 4 }}>
+              <Eyebrow>Where it stands</Eyebrow>
+              <p className="caption">{summaryLine(latest.summary)}</p>
+            </div>
+          ) : null}
           <div style={{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <HeroNumeral value={total} label="messages in this scene" />
             <div className="block" style={{ gap: 6, minWidth: 260 }}>

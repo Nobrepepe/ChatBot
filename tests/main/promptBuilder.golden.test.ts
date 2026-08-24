@@ -64,10 +64,7 @@ function makeScene(extra: Partial<Scene> = {}): Scene {
     worldId: 1,
     locationId: null,
     title: 'The rooftop',
-    premise: 'A storm traps everyone inside.',
-    tone: 'Tense',
-    timeOfDay: 'Night',
-    relationshipStatus: 'Wary allies',
+    previouslyOn: 'They parted badly on the pier.',
     mode: 'roleplay',
     summary: '',
     narratorEnabled: false,
@@ -75,6 +72,8 @@ function makeScene(extra: Partial<Scene> = {}): Scene {
     publicationId: null,
     displayMode: null,
     characterIds: [11],
+    autoSummaryAt: 0,
+    autoMemoriesAt: 0,
     createdAt: '',
     updatedAt: ''
   , ...extra }
@@ -98,7 +97,15 @@ function msg(role: Message['role'], content: string, extra: Partial<Message> = {
 const persona: Persona = { id: 3, name: 'Rui', description: 'A traveling scribe.', createdAt: '' }
 
 function memory(characterId: number, type: Memory['type'], content: string): Memory {
-  return { id: 0, characterId, type, content, sourceSceneId: null, status: 'approved', createdAt: '' }
+  return {
+    id: 0,
+    characterId,
+    type,
+    content,
+    sourceSceneId: null,
+    lifecycleStatus: 'canonical',
+    createdAt: ''
+  }
 }
 
 function lore(id: number, title: string, keywords: string[], alwaysInclude = false): LoreEntry {
@@ -309,15 +316,15 @@ describe('matchLore', () => {
     lore(3, 'Unmatched', ['dragon'])
   ]
 
-  it('matches always-include, keyword-in-premise and keyword-in-history', () => {
-    const scene = makeScene({ premise: 'The storm bell rings.' })
+  it('matches always-include, keyword-in-title and keyword-in-history', () => {
+    const scene = makeScene({ title: 'The storm bell rings.' })
     const matches = matchLore(entries, scene, [])
     expect(matches.map((m) => m.entry.id)).toEqual([1, 2])
     expect(matches[1]!.reason).toBe('matched keyword "storm bell"')
   })
 
   it('searches only the recent window and skips deleted messages', () => {
-    const scene = makeScene({ premise: '', title: '' })
+    const scene = makeScene({ previouslyOn: '', title: '' })
     const old = msg('user', 'a chime sounds')
     const recent = Array.from({ length: 10 }, () => msg('user', 'nothing'))
     expect(matchLore(entries, scene, [old, ...recent]).map((m) => m.entry.id)).toEqual([1])

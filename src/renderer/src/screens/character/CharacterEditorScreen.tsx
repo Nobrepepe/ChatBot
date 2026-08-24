@@ -279,7 +279,7 @@ export default function CharacterEditorScreen(): React.JSX.Element {
           )}
         </div>
 
-        <div className="block" style={{ flex: '1 1 420px', maxWidth: 640 }}>
+        <div className="block" style={{ flex: '1 1 420px', maxWidth: 800 }}>
           <Eyebrow>Basics</Eyebrow>
           <Field label="Name" value={draft.name} onChange={set('name')} readOnly={readOnly} />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 'var(--space-4)' }}>

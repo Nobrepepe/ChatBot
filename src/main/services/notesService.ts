@@ -1,20 +1,10 @@
 /** Pure note-workspace helpers: filtering, context selection, and AI actions. */
 
 import { createHash } from 'node:crypto'
-import { NOTE_CATEGORIES, type NoteChatMessage, type WorldNote } from '@shared/types'
+import { NOTE_ACTION_TYPES, NOTE_CATEGORIES, type NoteChatMessage, type WorldNote } from '@shared/types'
+import { extractActionBlocks } from '../prompt/actionBlocks'
 
 const WORDS = /[\p{L}\p{N}]+/gu
-
-const ACTION_BLOCK = new RegExp(
-  [
-    '```note_action\\s*\\n(?<direct>[\\s\\S]*?)\\s*\\n```',
-    '`note_action`\\s*\\n?\\s*```json\\s*\\n(?<labelled>[\\s\\S]*?)\\s*\\n```',
-    '```json\\s*\\n(?<generic>[\\s\\S]*?)\\s*\\n```',
-    '(?:^|\\n)(?<bare>\\[\\s*\\{[\\s\\S]*\\}\\s*\\])\\s*$',
-    '(?:^|\\n)(?<bareObject>\\{\\s*"type"\\s*:\\s*"(?:open|create|append|replace)"[\\s\\S]*\\})\\s*$'
-  ].join('|'),
-  'gi'
-)
 
 const STOPWORDS = new Set([
   'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'for', 'from',
@@ -155,26 +145,14 @@ export function parseNoteActions(
   text: string,
   validNoteIds: Set<number>
 ): { visibleText: string; actions: NoteAction[] } {
-  const actions: NoteAction[] = []
-  const parts: string[] = []
-  let cursor = 0
-  let ordinal = 0
-  for (const match of text.matchAll(ACTION_BLOCK)) {
-    parts.push(text.slice(cursor, match.index))
-    const groups = match.groups ?? {}
-    const raw = groups['direct'] ?? groups['labelled'] ?? groups['generic'] ?? groups['bare'] ?? groups['bareObject']
-    let consumed = false
-    try {
-      const decoded: unknown = JSON.parse(raw ?? '')
-      const payloads = Array.isArray(decoded) ? decoded : [decoded]
-      if (!payloads.length || !payloads.every((p) => p && typeof p === 'object' && !Array.isArray(p))) {
-        throw new Error('invalid action payload')
-      }
-      const parsed: { actionType: NoteAction['actionType']; target: number | null; payload: Record<string, unknown> }[] = []
-      for (const item of payloads as Record<string, unknown>[]) {
+  const { visibleText, actions } = extractActionBlocks<Omit<NoteAction, 'ordinal'>>(
+    text,
+    { fenceTag: 'note_action', types: NOTE_ACTION_TYPES },
+    (payloads) =>
+      payloads.map((item) => {
         const payload: Record<string, unknown> = { ...item }
         const actionType = String(payload['type'] ?? '').toLowerCase()
-        if (!['open', 'create', 'append', 'replace'].includes(actionType)) {
+        if (!(NOTE_ACTION_TYPES as readonly string[]).includes(actionType)) {
           throw new Error('unsupported action')
         }
         let target: number | null = null
@@ -195,21 +173,10 @@ export function parseNoteActions(
         if (['create', 'append', 'replace'].includes(actionType) && typeof payload['content'] !== 'string') {
           throw new Error('missing content')
         }
-        parsed.push({ actionType: actionType as NoteAction['actionType'], target, payload })
-      }
-      for (const { actionType, target, payload } of parsed) {
-        actions.push({ ordinal, actionType, targetNoteId: target, payload })
-        ordinal += 1
-      }
-      consumed = true
-    } catch {
-      /* fall through: keep the block visible */
-    }
-    if (!consumed) parts.push(match[0])
-    cursor = match.index + match[0].length
-  }
-  parts.push(text.slice(cursor))
-  return { visibleText: parts.join('').trim(), actions }
+        return { actionType: actionType as NoteAction['actionType'], targetNoteId: target, payload }
+      })
+  )
+  return { visibleText, actions: actions.map((a, ordinal) => ({ ordinal, ...a })) }
 }
 
 export { linkNoteReferences } from '@shared/noteLinks'

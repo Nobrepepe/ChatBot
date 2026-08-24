@@ -88,6 +88,19 @@ export function registerIpcHandlers(): void {
   handle('scenes:save', scenes.saveScene)
   handle('scenes:delete', scenes.deleteScene)
   handle('scenes:setDisplayMode', scenes.setSceneDisplayMode)
+  handle('scenes:inviteCharacters', (sceneId, characterIds) => {
+    for (const id of scenes.inviteCharacters(sceneId, characterIds)) {
+      const character = characters.getCharacter(id)
+      if (!character) continue
+      // Display-only: system notes are never sent to the model or exported.
+      messages.addMessage({
+        sceneId,
+        role: 'system-note',
+        characterId: id,
+        content: `${character.name} joins the scene.`
+      })
+    }
+  })
 
   handle('messages:list', (sceneId) => messages.listMessages(sceneId))
   handle('messages:count', messages.countMessages)
@@ -102,6 +115,15 @@ export function registerIpcHandlers(): void {
   handle('memories:save', memories.saveMemory)
   handle('memories:delete', memories.deleteMemory)
 
+  handle('memories:proposalsForScene', (sceneId) => memories.listSceneProposals(sceneId))
+  handle('memories:proposalsForCharacter', (characterId) =>
+    memories.listCharacterProposals(characterId)
+  )
+  handle('memories:approveSuggestion', (id, edited) =>
+    memories.approveMemorySuggestion(id, edited.content, edited.type)
+  )
+  handle('memories:rejectSuggestion', (id) => memories.setMemorySuggestionStatus(id, 'rejected'))
+
   handle('chat:start', startChatStream)
   handle('chat:cancel', cancelChatStream)
   handle('chat:cancelOneShot', cancelSceneOneShot)
@@ -113,7 +135,7 @@ export function registerIpcHandlers(): void {
     runSceneOneShot(sceneId, (signal) => chat.impersonate(sceneId, draft, signal))
   )
   handle('chat:suggestMemories', (sceneId) =>
-    runSceneOneShot(sceneId, (signal) => chat.suggestMemories(sceneId, signal))
+    runSceneOneShot(sceneId, (signal) => chat.proposeMemories(sceneId, signal))
   )
   handle('chat:promptDebug', (sceneId) => {
     const result = chat.build(sceneId)

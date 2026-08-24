@@ -1,10 +1,11 @@
-import { useMemo, useRef, useState, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
+import { useMemo, useRef, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Character, Message } from '@shared/types'
 import { parseSpeakerPrefix, stripWirePrefixes } from '@shared/wireFormat'
+import { nextInSeries } from '@shared/titleSeries'
 import { Screen } from '../../components/Screen'
 import { Eyebrow, FadingBar, PulseDot, Rule, TextAction, VRule } from '../../components/primitives'
 import { Field } from '../../components/fields'
@@ -14,6 +15,8 @@ import { useSnack } from '../../components/snack'
 import { ApiError, call } from '../../lib/api'
 import { useIpcMutation, useIpcQuery } from '../../lib/queries'
 import { useChatStream } from './useChatStream'
+import { useStickToBottom } from './useStickToBottom'
+import { MemoryProposalList } from './MemoryProposals'
 import { PromptDebugBody } from './PromptDebugOverlay'
 
 function Markdown({ children }: { children: string }): React.JSX.Element {
@@ -48,6 +51,7 @@ function OneShotProgress({
 }
 
 export default function ChatScreen(): React.JSX.Element {
+  const navigate = useNavigate()
   const overlay = useOverlay()
   const { snack } = useSnack()
   const client = useQueryClient()
@@ -92,10 +96,16 @@ export default function ChatScreen(): React.JSX.Element {
     client.invalidateQueries({ queryKey: ['scenes:get', sceneId] })
   }
 
-  const stream = useChatStream(refreshMessages, (message) => {
-    refreshMessages()
-    snack(message, true)
-  })
+  const stream = useChatStream(
+    (trouble) => {
+      refreshMessages()
+      if (trouble) snack(trouble, true)
+    },
+    (message) => {
+      refreshMessages()
+      snack(message, true)
+    }
+  )
 
   // Summary, impersonation and memory suggestions each cost a full prompt and
   // cannot usefully overlap — with a streamed reply either. The ref is the
@@ -153,12 +163,17 @@ export default function ChatScreen(): React.JSX.Element {
     displayCharacter?.portraitPath ||
     ''
 
-  useEffect(() => {
-    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight })
-  }, [messages.length, stream.streamText])
+  // Entering a scene lands on its last line; see useStickToBottom for why the
+  // transcript element alone is not enough.
+  useStickToBottom(
+    transcriptRef,
+    [messages.length, stream.streamText, displayMode],
+    messagesQuery.isSuccess
+  )
 
   function speakerFor(message: Message): string {
     if (message.role === 'user') return persona?.name ?? 'You'
+    if (message.role === 'system-note') return ''
     if (message.role === 'narrator') return 'Narrator'
     const character = cast.find((c) => c.id === message.characterId)
     return character?.name ?? cast[0]?.name ?? 'Character'
@@ -284,6 +299,24 @@ export default function ChatScreen(): React.JSX.Element {
     )
   }
 
+  /**
+   * The next scene in the series: same cast, the title advanced one part, and
+   * everything this scene remembers carried in as its opening context. It
+   * opens scene setup rather than creating the scene — nothing is written
+   * until the writer begins it.
+   */
+  function continueAsNewScene(summary: string): void {
+    if (!scene) return
+    const previously = [scene.previouslyOn.trim(), summary.trim()].filter(Boolean).join('\n\n')
+    navigate(`/world/${scene.worldId}/scene/new`, {
+      state: {
+        title: nextInSeries(scene.title),
+        previouslyOn: previously,
+        characterIds: scene.characterIds
+      }
+    })
+  }
+
   async function summarizeScene(): Promise<void> {
     const summary = await runOneShot('summarize', () => call('chat:summarize', sceneId))
     if (summary === null) return
@@ -291,71 +324,119 @@ export default function ChatScreen(): React.JSX.Element {
     overlay.open({
       eyebrow: 'Summary',
       title: 'What this scene now remembers.',
-      render: () => <p className="body-text" style={{ whiteSpace: 'pre-wrap' }}>{summary}</p>
+      render: (close) => (
+        <div className="block">
+          <p className="body-text" style={{ whiteSpace: 'pre-wrap' }}>{summary}</p>
+          <div className="overlay-actions">
+            <TextAction
+              onClick={() => {
+                close()
+                continueAsNewScene(summary)
+              }}
+              sub={`The same cast, carried in as “previously on”. It becomes ${nextInSeries(scene?.title ?? '')}.`}
+            >
+              Continue as a new scene →
+            </TextAction>
+          </div>
+        </div>
+      )
     })
   }
 
   async function suggestMemories(): Promise<void> {
-    const suggestions = await runOneShot('memories', () => call('chat:suggestMemories', sceneId))
-    if (suggestions === null) return
-    if (suggestions.length === 0) {
-      snack('Nothing stood out as worth remembering.')
+    const proposals = await runOneShot('memories', () => call('chat:suggestMemories', sceneId))
+    if (proposals === null) return
+    if (proposals.length === 0) {
+      snack('Nothing in the scene changed what they carry.')
       return
     }
     overlay.open({
-      eyebrow: 'Memory suggestions',
-      title: 'Review what may become canon.',
-      render: () => <SuggestionReview suggestions={suggestions} />
+      eyebrow: 'Memory proposals',
+      title: 'Review what they would remember.',
+      render: () => (
+        <MemoryProposalList
+          proposals={proposals}
+          onSettled={() => client.invalidateQueries({ queryKey: ['memories:list'] })}
+        />
+      )
     })
   }
 
-  function SuggestionReview({ suggestions }: { suggestions: import('@shared/types').Memory[] }): React.JSX.Element {
-    const [resolved, setResolved] = useState<Record<number, 'approved' | 'rejected'>>({})
-    const [texts, setTexts] = useState<Record<number, string>>(
-      Object.fromEntries(suggestions.map((s) => [s.id, s.content]))
-    )
+  function inviteCharacters(): void {
+    overlay.open({
+      eyebrow: 'Cast',
+      title: 'Who else is here?',
+      render: (close) => <InvitePicker close={close} />
+    })
+  }
+
+  /**
+   * The cast of the world minus the cast of the scene. Inviting appends the
+   * chosen characters and notes their arrival in the transcript; the scene
+   * becomes a group chat on its own from there.
+   */
+  function InvitePicker({ close }: { close: () => void }): React.JSX.Element {
+    const [picked, setPicked] = useState<Set<number>>(new Set())
+    const present = new Set(cast.map((c) => c.id))
+    const others = (charactersQuery.data ?? []).filter((c) => !present.has(c.id))
+
+    if (others.length === 0) {
+      return <p className="body-text">Everyone in this world is already in the scene.</p>
+    }
     return (
       <div className="block">
-        <p className="body-text">Approved facts are injected into every future prompt for their character.</p>
-        {suggestions.map((s) => {
-          const state = resolved[s.id]
-          const characterName = cast.find((c) => c.id === s.characterId)?.name ?? '?'
-          return (
-            <div key={s.id} className="block" style={{ gap: 6 }}>
-              <Eyebrow>{characterName}{state ? ` · ${state}` : ''}</Eyebrow>
-              <Field
-                label=""
-                value={texts[s.id] ?? ''}
-                onChange={(v) => setTexts((t) => ({ ...t, [s.id]: v }))}
-                lines={2}
-                readOnly={!!state}
-              />
-              {!state ? (
-                <span style={{ display: 'flex', gap: 'var(--space-4)' }}>
-                  <TextAction
-                    kind="secondary"
-                    onClick={async () => {
-                      await call('memories:save', { ...s, content: texts[s.id] ?? s.content, status: 'approved' })
-                      setResolved((r) => ({ ...r, [s.id]: 'approved' }))
-                    }}
-                  >
-                    Approve
-                  </TextAction>
-                  <TextAction
-                    kind="destructive"
-                    onClick={async () => {
-                      await call('memories:delete', s.id)
-                      setResolved((r) => ({ ...r, [s.id]: 'rejected' }))
-                    }}
-                  >
-                    Reject
-                  </TextAction>
+        <p className="body-text">
+          They join from the next reply on, and the model is given their full profile.
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 'var(--space-4)' }}>
+          {others.map((c) => {
+            const chosen = picked.has(c.id)
+            const art = c.tileImagePath || c.portraitPath
+            return (
+              <button
+                key={c.id}
+                type="button"
+                className="row-line"
+                style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}
+                onClick={() =>
+                  setPicked((current) => {
+                    const next = new Set(current)
+                    if (next.has(c.id)) next.delete(c.id)
+                    else next.add(c.id)
+                    return next
+                  })
+                }
+              >
+                {art ? (
+                  <Art path={art} treatment="alpha" ghost={!chosen} style={{ width: '100%', aspectRatio: '16/9', objectFit: 'contain' }} />
+                ) : null}
+                <span className="row-title" style={{ fontSize: 'var(--size-title)' }}>{c.name}</span>
+                <span className="caption" style={chosen ? { color: 'var(--accent)' } : undefined}>
+                  {chosen ? 'joins the scene' : 'not invited'}
                 </span>
-              ) : null}
-              <Rule end={58} />
-            </div>
-          )
-        })}
+              </button>
+            )
+          })}
+        </div>
+        <div className="overlay-actions">
+          <TextAction
+            disabled={picked.size === 0}
+            onClick={async () => {
+              try {
+                await call('scenes:inviteCharacters', sceneId, [...picked])
+                refreshMessages()
+                client.invalidateQueries({ queryKey: ['scenes:get', sceneId] })
+                snack(picked.size === 1 ? 'They join the scene.' : 'They join the scene together.')
+                close()
+              } catch (err) {
+                snack((err as Error).message, true)
+              }
+            }}
+            sub="The scene becomes a group scene; choose who answers with Choose responder."
+          >
+            {picked.size > 1 ? 'Invite them →' : 'Invite →'}
+          </TextAction>
+        </div>
       </div>
     )
   }
@@ -457,7 +538,7 @@ export default function ChatScreen(): React.JSX.Element {
           {world?.name} · {scene.mode} · {castNames.join(', ')}
         </Eyebrow>
         <h1 className="display" style={{ fontSize: 'var(--size-display-m)' }}>
-          {scene.title || scene.premise || 'Untitled scene'}
+          {scene.title || 'Untitled scene'}
         </h1>
         {hubStatus.data?.hubMode &&
         scene.publicationId &&
@@ -537,6 +618,13 @@ export default function ChatScreen(): React.JSX.Element {
         ) : null}
         <TextAction
           kind="secondary"
+          onClick={inviteCharacters}
+          title="Bring another character of this world into the scene"
+        >
+          Invite character
+        </TextAction>
+        <TextAction
+          kind="secondary"
           onClick={() =>
             overlay.open({
               eyebrow: 'Prompt debug',
@@ -576,17 +664,23 @@ export default function ChatScreen(): React.JSX.Element {
             ref={transcriptRef}
             style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', paddingRight: 8 }}
           >
-            {messages.map((message) => (
-              <Turn
-                key={message.id}
-                message={message}
-                speaker={speakerFor(message)}
-                isUser={message.role === 'user'}
-                onEdit={() => editMessage(message)}
-                onDelete={() => deleteMessage(message)}
-                onRemember={message.role === 'character' ? () => rememberMessage(message) : undefined}
-              />
-            ))}
+            {messages.map((message) =>
+              message.role === 'system-note' ? (
+                <p key={message.id} className="caption" style={{ textAlign: 'center' }}>
+                  {message.content}
+                </p>
+              ) : (
+                <Turn
+                  key={message.id}
+                  message={message}
+                  speaker={speakerFor(message)}
+                  isUser={message.role === 'user'}
+                  onEdit={() => editMessage(message)}
+                  onDelete={() => deleteMessage(message)}
+                  onRemember={message.role === 'character' ? () => rememberMessage(message) : undefined}
+                />
+              )
+            )}
             {stream.streamText !== null ? (
               <div className="block" style={{ gap: 6 }}>
                 <span style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
@@ -616,6 +710,7 @@ export default function ChatScreen(): React.JSX.Element {
           draft={draft}
           setDraft={setDraft}
           busy={stream.busy}
+          status={stream.status}
           oneShot={oneShot}
           onSend={send}
           onStop={stream.cancel}
@@ -720,6 +815,7 @@ function Composer({
   draft,
   setDraft,
   busy,
+  status,
   oneShot,
   onSend,
   onStop,
@@ -730,6 +826,8 @@ function Composer({
   draft: string
   setDraft: (v: string) => void
   busy: boolean
+  /** An automatic pass still owed on this turn; the composer stays locked. */
+  status: string | null
   oneShot: OneShot | null
   onSend: () => void
   onStop: () => void
@@ -755,7 +853,12 @@ function Composer({
         />
       </div>
       <div style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'baseline', flexWrap: 'wrap' }}>
-        {busy ? (
+        {status ? (
+          <span style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'baseline' }}>
+            <PulseDot label={status} />
+            <span className="caption">the reply lands when this finishes</span>
+          </span>
+        ) : busy ? (
           <TextAction size={24} onClick={onStop}>
             Stop →
           </TextAction>

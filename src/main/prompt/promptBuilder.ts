@@ -143,12 +143,7 @@ export function buildMemorySection(characterName: string, memories: Memory[]): s
 }
 
 export function buildSceneSection(scene: Scene): string {
-  return block(
-    ['Scene premise', scene.premise],
-    ['Time of day', scene.timeOfDay],
-    ['Tone', scene.tone],
-    ['Current relationship status', scene.relationshipStatus]
-  )
+  return block(['Scene title', scene.title], ['Previously', scene.previouslyOn])
 }
 
 export type LoreMatch = { entry: LoreEntry; reason: string }
@@ -206,7 +201,7 @@ export function matchLore(
   recent = 10
 ): LoreMatch[] {
   const visible = history.filter((m) => !m.deletedAt && m.role !== 'system-note')
-  const haystack = [scene.premise, scene.title, ...visible.slice(-recent).map((m) => m.content)]
+  const haystack = [scene.title, scene.previouslyOn, ...visible.slice(-recent).map((m) => m.content)]
     .join(' ')
     .toLowerCase()
 

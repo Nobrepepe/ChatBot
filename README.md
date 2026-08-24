@@ -4,7 +4,7 @@ A desktop app for chatting with your fictional characters in a visual-novel-styl
 interface, powered by local AI models. Built with Electron, TypeScript, React and Vite.
 
 Create worlds, give them characters with prompt-ready profiles, set up scenes
-(premise, tone, relationship state, mode), and chat. Approved canon and relationship
+(title, what happened previously, mode), and chat. Approved canon and relationship
 memories are injected into every prompt, so characters develop over time instead of
 starting fresh each session.
 
@@ -12,14 +12,17 @@ starting fresh each session.
 
 - **Worlds**: cover and scene-fallback art, setting descriptions, style guides,
   and a **lorebook** — modular lore entries injected into prompts only when their
-  keywords appear in the scene premise or recent messages
+  keywords appear in the scene title or recent messages
 - **Characters**: structured 8-section profile (appearance, personality, backstory,
   behavior rules, voice, relationship to you, direct AI instructions, sprites),
   a portrait, and a 16:9 shelf image; **custom sprites** carry a call sign such as
   `sad` or `sword-attack` — when a reply starts with `[sad]` the portrait swaps
-- **Scenes**: cast (one or several characters), premise, tone, time of day,
-  relationship status, your **persona**, an optional **narrator**, and a mode:
-  *Roleplay*, *Interview*, or *Author assistant*
+- **Scenes**: cast (one or several characters), a title, a **previously on**
+  field carrying summaries of earlier scenes, your **persona**, an optional
+  **narrator**, and a mode: *Roleplay*, *Interview*, or *Author assistant*.
+  **Invite character** brings someone else in mid-scene, and a finished scene
+  continues into the next part of its series — *The rooftop - Part II* —
+  carrying its summary in
 - **Scene templates**: save a setup and start future scenes from it
 - **Multi-character scenes**: characters reply in labeled turns with distinct
   voices; a **Choose responder** action lets one character answer another directly
@@ -30,9 +33,16 @@ starting fresh each session.
   and **Save & continue** — trim a reply in the editor and the AI finishes it
   without regenerating what you kept
 - **Memory / canon system**: canon facts and relationship state per character,
-  injected into every prompt; **automatic memory suggestions** with an
-  approve / edit / reject review, plus scene summaries that cover history
+  injected into every prompt. **Memory proposals** work like the note proposals
+  below: the model is shown what the character already remembers, with stable
+  ids, and proposes *remember / rewrite / forget* actions — so a changed
+  relationship rewrites the memory that is there instead of contradicting it.
+  Every action waits for your approval. Scene summaries cover the history
   falling outside the context window
+- **Automatic passes** (off by default): a summary and a memory review that run
+  themselves every few replies, like an autosave. Sending stays locked until the
+  pass finishes, so the turn cannot stack on top of it — at the cost of a
+  noticeably longer reply on the turns one runs
 - **Worldbuilding notes**: a private notes workspace per world — never sent with
   scene prompts. The AI workspace pairs a writing-assistant conversation with the
   note browser: per-note context modes (always / when relevant / excluded),

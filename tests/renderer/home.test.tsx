@@ -3,6 +3,7 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   installFakeApi,
+  makeCharacter,
   makeMessage,
   makeScene,
   makeWorld,
@@ -83,5 +84,48 @@ describe('the home screen mid-scene', () => {
   it('says whether the scene has been summarized', async () => {
     renderRoute('/')
     expect(await screen.findByText(/nothing summarized yet/)).toBeInTheDocument()
+  })
+
+  it('shows where the scene stands, not just that it was summarized', async () => {
+    api.store.scenes[0]!.summary = '- She came looking for you.\n- Nothing was settled.'
+    renderRoute('/')
+    expect(await screen.findByText('Where it stands')).toBeInTheDocument()
+    expect(
+      screen.getByText('She came looking for you. · Nothing was settled.')
+    ).toBeInTheDocument()
+  })
+})
+
+describe('the character the scene is waiting on', () => {
+  beforeEach(() => {
+    api.store.worlds.push(makeWorld({ id: 1, name: 'Hidden Village' }))
+    api.store.characters.push(
+      makeCharacter({ id: 10, worldId: 1, name: 'Ayame', portraitPath: 'worlds/hv/ayame.png' }),
+      makeCharacter({ id: 11, worldId: 1, name: 'Kaguya', portraitPath: 'worlds/hv/kaguya.png' })
+    )
+    api.store.scenes.push(
+      makeScene({ id: 5, worldId: 1, title: 'The rooftop', characterIds: [10, 11] })
+    )
+  })
+
+  it('is named in the line under the headline, and is whoever spoke last', async () => {
+    api.store.messages.push(
+      makeMessage({ sceneId: 5, role: 'character', characterId: 10, content: 'Hello.' }),
+      makeMessage({ sceneId: 5, role: 'character', characterId: 11, content: 'And me.' })
+    )
+    renderRoute('/')
+    expect(await screen.findByText(/with Kaguya\./)).toBeInTheDocument()
+  })
+
+  it('falls back to the first of the cast before anyone has spoken', async () => {
+    renderRoute('/')
+    expect(await screen.findByText(/with Ayame\./)).toBeInTheDocument()
+  })
+
+  it('is not drawn: the art on this screen is the world, not the cast', async () => {
+    renderRoute('/')
+    await screen.findByText(/with Ayame\./)
+    const backdropArt = [...document.querySelectorAll<HTMLImageElement>('.backdrop img')]
+    expect(backdropArt.some((img) => img.src.includes('ayame'))).toBe(false)
   })
 })

@@ -9,7 +9,8 @@ import type {
   LoreEntry,
   Memory,
   MemoryDraft,
-  MemoryStatus,
+  MemoryLifecycleStatus,
+  MemoryProposal,
   MemoryType,
   Message,
   NoteChatMessage,
@@ -108,6 +109,8 @@ export interface IpcMethods {
   'scenes:save': (draft: SceneDraft) => number
   'scenes:delete': (id: number) => void
   'scenes:setDisplayMode': (id: number, mode: DisplayMode | null) => void
+  /** Adds characters to a running scene and notes their arrival in the transcript. */
+  'scenes:inviteCharacters': (sceneId: number, characterIds: number[]) => void
 
   'messages:list': (sceneId: number) => Message[]
   'messages:count': (sceneId: number) => number
@@ -120,10 +123,19 @@ export interface IpcMethods {
 
   'memories:list': (
     characterId: number,
-    options?: { types?: MemoryType[]; status?: MemoryStatus | 'any' }
+    options?: { types?: MemoryType[]; lifecycle?: MemoryLifecycleStatus | 'any' }
   ) => Memory[]
   'memories:save': (draft: MemoryDraft) => number
   'memories:delete': (id: number) => void
+
+  /** Memory actions the model has proposed and the user has not resolved. */
+  'memories:proposalsForScene': (sceneId: number) => MemoryProposal[]
+  'memories:proposalsForCharacter': (characterId: number) => MemoryProposal[]
+  'memories:approveSuggestion': (
+    id: number,
+    edited: { content: string; type: MemoryType }
+  ) => number
+  'memories:rejectSuggestion': (id: number) => void
 
   'chat:start': (params: ChatStartParams) => number
   'chat:cancel': (requestId: number) => void
@@ -131,7 +143,7 @@ export interface IpcMethods {
   'chat:cancelOneShot': (sceneId: number) => void
   'chat:summarize': (sceneId: number) => string
   'chat:impersonate': (sceneId: number, draft?: string) => string
-  'chat:suggestMemories': (sceneId: number) => Memory[]
+  'chat:suggestMemories': (sceneId: number) => MemoryProposal[]
   'chat:promptDebug': (sceneId: number) => PromptDebugInfo
   /** Writes a Markdown transcript into the exports dir; returns the path. */
   'chat:export': (sceneId: number) => string
@@ -198,7 +210,8 @@ export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; m
 /** Streaming events pushed from main (chat streaming arrives in a later phase). */
 export interface StreamEvent {
   requestId: number
-  type: 'chunk' | 'done' | 'error'
+  /** 'status' reports work still owed on this turn — an automatic pass. */
+  type: 'chunk' | 'status' | 'done' | 'error'
   delta?: string
   message?: string
 }

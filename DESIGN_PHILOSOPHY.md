@@ -10,8 +10,9 @@ this document wins.
 
 > This is the second edition. The first edition governed the Flet app; its scroll-region
 > constraints, its Flet-specific spellings, and its fixed 52px gutters are superseded.
-> Scrolling is unrestricted everywhere. Two rules carried over unchanged, because they are the
-> identity of the app: **there are no boxes**, and **art keeps its transparent edges**.
+> A screen is a document and the window scrolls it — with one exception, stated in Rule 3. Two
+> rules carried over unchanged, because they are the identity of the app: **there are no
+> boxes**, and **art keeps its transparent edges**.
 
 ---
 
@@ -32,7 +33,7 @@ Three consequences, in priority order. When two conflict, the earlier one wins.
 
 ---
 
-## 2. The two structural rules
+## 2. The three structural rules
 
 ### Rule 1 — There are no boxes
 
@@ -69,6 +70,29 @@ a rectangle — check the corners.
 
 Every no-art state is deliberate: `.hatch`, a 45° hatch at the correct aspect ratio with a mono
 caption (`NO PORTRAIT`), never a broken image or an icon.
+
+
+### Rule 3 — A screen is a document; a conversation is the exception
+
+Every screen grows and lets the window scroll it. Nothing is pinned, nothing is fixed, and a
+long page is simply long — that is what makes the screens read as pages.
+
+The chat screen is the one exception, and it earns it: a composer that scrolls away from the
+conversation it belongs to is not a composer. It declares `layout="conversation"`, fits the
+window, and gives its one long region — the transcript — the scrolling. Two obligations come
+with that exception:
+
+- **The exception buys its own space.** Fitting the window does not create room; it fixes what
+  the chrome costs forever. A permanent toolbar, and the air around it, are charged to the
+  conversation on every frame — so occasional actions go behind one text action, and the
+  vertical rhythm steps down one notch. Measure it rather than trusting it: at the app's
+  minimum window height the transcript holds about half the window, and it is several times
+  the next largest thing on screen. A quarter means the chrome has taken over.
+- **The scroll region still dissolves.** A region that scrolls has a real edge, and Rule 1 says
+  edges are implied. Fade it with `mask-image` so the backlog recedes under the chrome instead
+  of being cut through the middle of its letters. The newest line is never faded.
+
+Do not add a second exception without writing the sentence that justifies it here.
 
 ---
 

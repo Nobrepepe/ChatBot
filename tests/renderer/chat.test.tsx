@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
@@ -11,10 +11,13 @@ import {
   type FakeApi
 } from './fakeApi'
 import { renderRoute } from './renderRoute'
+import { contentResized } from './setup'
 
 let api: FakeApi
 
-function seed(over: { characterIds?: number[]; messages?: ReturnType<typeof makeMessage>[] } = {}): void {
+function seed(
+  over: { characterIds?: number[]; messages?: ReturnType<typeof makeMessage>[] } = {}
+): void {
   api = installFakeApi({
     worlds: [makeWorld({ id: 1 })],
     characters: [
@@ -43,11 +46,47 @@ async function finish(): Promise<void> {
   })
 }
 
+const transcript = (): HTMLElement => {
+  const el = document.querySelector('.transcript')
+  if (!el) throw new Error('no transcript on screen')
+  return el as HTMLElement
+}
+
 /**
- * jsdom has no layout, so a scroll region has to be described to it: the page
- * is taller than the viewport, which is exactly the case the transcript has to
- * handle (the screen grows, so the document scrolls, not the transcript).
+ * jsdom has no layout, so a scroll region has to be described to it. The stub
+ * goes on every div: the transcript is created by the render, well after the
+ * test could reach for it, and it is the only element the hook ever scrolls.
+ * The document is not a div, which is the point — the screen now fits the
+ * window, so the page must stay where it is.
  */
+function describeScrollRegions(scrollHeight = 2000, clientHeight = 800): void {
+  for (const [prop, value] of [
+    ['scrollHeight', scrollHeight],
+    ['clientHeight', clientHeight]
+  ] as const) {
+    Object.defineProperty(HTMLDivElement.prototype, prop, { value, configurable: true })
+  }
+}
+
+function forgetScrollRegions(): void {
+  for (const prop of ['scrollHeight', 'clientHeight']) {
+    delete (HTMLDivElement.prototype as unknown as Record<string, unknown>)[prop]
+  }
+}
+
+/** Move the reader's own scroll position, the way the browser reports it. */
+function scrollTranscriptTo(top: number): void {
+  transcript().scrollTop = top
+  fireEvent.scroll(transcript())
+}
+
+/** Reach one of the actions that live behind “Scene actions →”. */
+async function sceneAction(name: string): Promise<void> {
+  await userEvent.click(await screen.findByRole('button', { name: 'Scene actions →' }))
+  await userEvent.click(await screen.findByRole('button', { name }))
+}
+
+/** A document tall enough to scroll, so a page that moves is a real failure. */
 function makePageScrollable(scrollHeight = 2000, clientHeight = 800): void {
   for (const [prop, value] of [
     ['scrollHeight', scrollHeight],
@@ -65,37 +104,90 @@ describe('entering a scene', () => {
         makeMessage({ id: 200 + i, sceneId: 5, content: `line ${i}` })
       )
     })
-    makePageScrollable()
+    describeScrollRegions()
   })
+
+  afterEach(forgetScrollRegions)
 
   it('lands on the last message instead of the top of the backlog', async () => {
     renderRoute('/chat/5')
     await screen.findByText('line 39')
-    await waitFor(() => expect(document.documentElement.scrollTop).toBe(2000))
+    await waitFor(() => expect(transcript().scrollTop).toBe(2000))
+  })
+
+  it('lands on the last message even when the scene resolves after its messages', async () => {
+    // The screen has no transcript until the scene itself arrives, so a scene
+    // that loses the race to its own message list used to spend the one entry
+    // scroll on nothing and open at the top of the backlog.
+    api.defer('scenes:get')
+    renderRoute('/chat/5')
+    await waitFor(() => expect(api.callsTo('messages:list').length).toBeGreaterThan(0))
+    api.release('scenes:get')
+    await screen.findByText('line 39')
+    await waitFor(() => expect(transcript().scrollTop).toBe(2000))
+  })
+
+  it('lands again on a transcript that was torn down and rebuilt', async () => {
+    // Leaving for the visual novel and coming back destroys the scroll region
+    // and builds a fresh one, which is also what StrictMode does on mount. The
+    // new element has no scroll position of its own, so entry is owed again.
+    renderRoute('/chat/5')
+    await waitFor(() => expect(transcript().scrollTop).toBe(2000))
+    await sceneAction('Visual novel →')
+    await waitFor(() => expect(document.querySelector('.transcript')).toBeNull())
+    await sceneAction('Rolling chat →')
+    await waitFor(() => expect(transcript().scrollTop).toBe(2000))
+  })
+
+  it('lands whenever the content first has a height, without being told', async () => {
+    // Whatever delays the layout — the stylesheet arriving, a font settling, a
+    // portrait resolving — reaches the pin as the same event: the content it
+    // watches changed size. Nothing has to know which of them it was.
+    forgetScrollRegions()
+    renderRoute('/chat/5')
+    await screen.findByText('line 39')
+    expect(transcript().scrollTop).toBe(0)
+
+    describeScrollRegions()
+    act(() => contentResized())
+    expect(transcript().scrollTop).toBe(2000)
+  })
+
+  it('scrolls the transcript and never the page', async () => {
+    // The actions and the composer are outside the transcript; if the document
+    // moved, they would leave the frame with the backlog.
+    makePageScrollable()
+    renderRoute('/chat/5')
+    await screen.findByText('line 39')
+    await waitFor(() => expect(transcript().scrollTop).toBe(2000))
+    expect(document.documentElement.scrollTop).toBe(0)
   })
 
   it('follows a streaming reply while the reader is at the bottom', async () => {
     renderRoute('/chat/5')
     await screen.findByText('line 39')
-    await waitFor(() => expect(document.documentElement.scrollTop).toBe(2000))
+    await waitFor(() => expect(transcript().scrollTop).toBe(2000))
     // Still within a line or two of the newest message.
-    document.documentElement.scrollTop = 1150
+    scrollTranscriptTo(1150)
     await userEvent.type(composer(), 'Hello.')
     await userEvent.keyboard('{Enter}')
     await chunk('She looks up.')
-    await waitFor(() => expect(document.documentElement.scrollTop).toBe(2000))
+    act(() => contentResized())
+    expect(transcript().scrollTop).toBe(2000)
   })
 
   it('leaves the reader alone once they have scrolled back into the scene', async () => {
     renderRoute('/chat/5')
     await screen.findByText('line 39')
-    await waitFor(() => expect(document.documentElement.scrollTop).toBe(2000))
-    document.documentElement.scrollTop = 200
+    await waitFor(() => expect(transcript().scrollTop).toBe(2000))
+    scrollTranscriptTo(200)
     await userEvent.type(composer(), 'Hello.')
     await userEvent.keyboard('{Enter}')
     await chunk('She looks up.')
     await screen.findByText(/She looks up/)
-    expect(document.documentElement.scrollTop).toBe(200)
+    // The reply grows the transcript under them, and it is still declined.
+    act(() => contentResized())
+    expect(transcript().scrollTop).toBe(200)
   })
 })
 
@@ -104,7 +196,10 @@ describe('the composer', () => {
 
   it('sends on Enter', async () => {
     renderRoute('/chat/5')
-    await userEvent.type(await screen.findByPlaceholderText('Say something'), 'I came looking for you.')
+    await userEvent.type(
+      await screen.findByPlaceholderText('Say something'),
+      'I came looking for you.'
+    )
     await userEvent.keyboard('{Enter}')
 
     await waitFor(() => expect(api.callsTo('chat:start')).toHaveLength(1))
@@ -128,7 +223,9 @@ describe('the composer', () => {
 
   it('says how the keys work', async () => {
     renderRoute('/chat/5')
-    expect(await screen.findByText('Enter sends · Shift+Enter makes a new line')).toBeInTheDocument()
+    expect(
+      await screen.findByText('Enter sends · Shift+Enter makes a new line')
+    ).toBeInTheDocument()
   })
 
   it('ignores an empty message', async () => {
@@ -209,7 +306,9 @@ describe('a multi-character scene', () => {
 
     // Selection alone is not a generation; it only renames the next turn.
     expect(api.callsTo('chat:start')).toHaveLength(0)
-    expect(screen.getByRole('button', { name: /Kaguya answers the next user turn/ })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /Kaguya answers the next user turn/ })
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Next: Kaguya' })).toBeInTheDocument()
 
     await userEvent.type(screen.getByPlaceholderText('Say something'), 'who is there?')
@@ -253,7 +352,13 @@ describe('turns already in the transcript', () => {
     seed({
       messages: [
         makeMessage({ id: 100, sceneId: 5, role: 'user', content: 'I came looking for you.' }),
-        makeMessage({ id: 101, sceneId: 5, role: 'character', characterId: 10, content: '"You found me."' })
+        makeMessage({
+          id: 101,
+          sceneId: 5,
+          role: 'character',
+          characterId: 10,
+          content: '"You found me."'
+        })
       ]
     })
   )
@@ -285,7 +390,11 @@ describe('turns already in the transcript', () => {
 
     await waitFor(() => expect(api.callsTo('chat:start')).toHaveLength(1))
     const [params] = api.callsTo('chat:start')[0] as [any]
-    expect(params).toMatchObject({ kind: 'continuation', messageId: 101, partial: '"You found me."' })
+    expect(params).toMatchObject({
+      kind: 'continuation',
+      messageId: 101,
+      partial: '"You found me."'
+    })
   })
 
   it('confirms before removing a turn', async () => {
@@ -334,22 +443,27 @@ describe('display modes', () => {
     seed({
       messages: [
         makeMessage({ id: 100, sceneId: 5, role: 'user', content: 'I came looking for you.' }),
-        makeMessage({ id: 101, sceneId: 5, role: 'character', characterId: 10, content: '"You found me."' })
+        makeMessage({
+          id: 101,
+          sceneId: 5,
+          role: 'character',
+          characterId: 10,
+          content: '"You found me."'
+        })
       ]
     })
   )
 
   it('remembers the mode per scene rather than globally', async () => {
     renderRoute('/chat/5')
-    await userEvent.click(await screen.findByRole('button', { name: 'Visual novel' }))
+    await sceneAction('Visual novel →')
     await waitFor(() => expect(api.callsTo('scenes:setDisplayMode')).toContainEqual([5, 'vn']))
   })
 
   it('shows the backlog only in visual novel mode', async () => {
     api.store.scenes[0]!.displayMode = 'vn'
     renderRoute('/chat/5')
-    expect(await screen.findByRole('button', { name: 'Backlog' })).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Backlog' }))
+    await sceneAction('Backlog →')
     const dialog = await screen.findByRole('dialog', { name: 'Everything said so far.' })
     expect(within(dialog).getByText('I came looking for you.')).toBeInTheDocument()
   })
@@ -368,19 +482,23 @@ describe('scene tools', () => {
   it('summarizes into an overlay', async () => {
     renderRoute('/chat/5')
     await userEvent.click(await screen.findByRole('button', { name: 'Summarize' }))
-    expect(await screen.findByRole('dialog', { name: 'What this scene now remembers.' })).toBeInTheDocument()
+    expect(
+      await screen.findByRole('dialog', { name: 'What this scene now remembers.' })
+    ).toBeInTheDocument()
     expect(screen.getByText('A summary.')).toBeInTheDocument()
   })
 
   it('exports the transcript and says where it landed', async () => {
     renderRoute('/chat/5')
-    await userEvent.click(await screen.findByRole('button', { name: 'Export' }))
-    expect(await screen.findByText(/Transcript saved to \/tmp\/exports\/scene_1\.md/)).toBeInTheDocument()
+    await sceneAction('Export →')
+    expect(
+      await screen.findByText(/Transcript saved to \/tmp\/exports\/scene_1\.md/)
+    ).toBeInTheDocument()
   })
 
   it('shows the exact payload behind the prompt debug panel', async () => {
     renderRoute('/chat/5')
-    await userEvent.click(await screen.findByRole('button', { name: 'Prompt debug' }))
+    await sceneAction('Prompt debug →')
     expect(
       await screen.findByRole('dialog', { name: 'What the model is actually sent.' })
     ).toBeInTheDocument()
@@ -389,7 +507,7 @@ describe('scene tools', () => {
 
   it('reports nothing worth remembering rather than an empty overlay', async () => {
     renderRoute('/chat/5')
-    await userEvent.click(await screen.findByRole('button', { name: 'Suggest memories' }))
+    await sceneAction('Suggest memories →')
     expect(
       await screen.findByText('Nothing in the scene changed what they carry.')
     ).toBeInTheDocument()
@@ -410,7 +528,7 @@ describe('scene tools', () => {
       })
     )
     renderRoute('/chat/5')
-    await userEvent.click(await screen.findByRole('button', { name: 'Suggest memories' }))
+    await sceneAction('Suggest memories →')
     expect(
       await screen.findByRole('dialog', { name: 'Review what they would remember.' })
     ).toBeInTheDocument()
@@ -438,7 +556,7 @@ describe('inviting a character', () => {
 
   it('offers only the characters who are not already here', async () => {
     renderRoute('/chat/5')
-    await userEvent.click(await screen.findByRole('button', { name: 'Invite character' }))
+    await sceneAction('Invite character →')
     expect(await screen.findByRole('dialog', { name: 'Who else is here?' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Kaguya/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Ayame/ })).not.toBeInTheDocument()
@@ -446,7 +564,7 @@ describe('inviting a character', () => {
 
   it('turns the scene into a group scene and says who arrived', async () => {
     renderRoute('/chat/5')
-    await userEvent.click(await screen.findByRole('button', { name: 'Invite character' }))
+    await sceneAction('Invite character →')
     await userEvent.click(await screen.findByRole('button', { name: /Kaguya/ }))
     await userEvent.click(screen.getByRole('button', { name: /^Invite →/ }))
 
@@ -458,14 +576,14 @@ describe('inviting a character', () => {
 
   it('will not invite nobody', async () => {
     renderRoute('/chat/5')
-    await userEvent.click(await screen.findByRole('button', { name: 'Invite character' }))
+    await sceneAction('Invite character →')
     expect(await screen.findByRole('button', { name: /^Invite →/ })).toBeDisabled()
   })
 
   it('says so when the whole world is already in the scene', async () => {
     seed({ characterIds: [10, 11] })
     renderRoute('/chat/5')
-    await userEvent.click(await screen.findByRole('button', { name: 'Invite character' }))
+    await sceneAction('Invite character →')
     expect(
       await screen.findByText('Everyone in this world is already in the scene.')
     ).toBeInTheDocument()
@@ -506,7 +624,12 @@ describe('a one-shot generation in flight', () => {
   beforeEach(() => {
     seed({ messages: [makeMessage({ id: 100, sceneId: 5 })] })
     api.store.personas = [
-      { id: 1, name: 'Kyzer', description: 'A wandering scribe.', createdAt: '2026-08-22T00:00:00.000Z' }
+      {
+        id: 1,
+        name: 'Kyzer',
+        description: 'A wandering scribe.',
+        createdAt: '2026-08-22T00:00:00.000Z'
+      }
     ]
     api.store.scenes[0]!.personaId = 1
   })
@@ -519,8 +642,11 @@ describe('a one-shot generation in flight', () => {
     expect(await screen.findByText('drafting your turn')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Impersonate' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Summarize' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Suggest memories' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Send →' })).toBeDisabled()
+    // Moving an action behind the overlay does not let it through the guard.
+    await userEvent.click(screen.getByRole('button', { name: 'Scene actions →' }))
+    expect(await screen.findByRole('button', { name: 'Suggest memories →' })).toBeDisabled()
+    await userEvent.keyboard('{Escape}')
 
     await act(async () => api.release('chat:impersonate'))
     expect(await screen.findByRole('button', { name: 'Impersonate' })).toBeEnabled()

@@ -53,6 +53,9 @@ export default function SceneSetupScreen(): React.JSX.Element {
 
   const characters = charactersQuery.data ?? []
   const templates = templatesQuery.data ?? []
+  // A character the Hub has stopped publishing is not offered to a new scene,
+  // but a scene being continued keeps whoever it already had.
+  const pickable = characters.filter((c) => !c.retiredAt || cast.has(c.id))
 
   function applyTemplate(templateId: number): void {
     const template = templates.find((t) => t.id === templateId)
@@ -183,7 +186,7 @@ export default function SceneSetupScreen(): React.JSX.Element {
             gap: 'var(--space-4)'
           }}
         >
-          {characters.map((c) => {
+          {pickable.map((c) => {
             const chosen = cast.has(c.id)
             const art = c.tileImagePath || c.portraitPath
             return (

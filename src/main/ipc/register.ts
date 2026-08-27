@@ -200,7 +200,6 @@ export function registerIpcHandlers(): void {
   handle('hub:activate', (stagedId) => hub.activate(hub.takeStaged(stagedId)))
   handle('hub:cancelStaged', (stagedId) => hub.cleanupStaged(hub.takeStaged(stagedId)))
   handle('hub:rollback', hub.rollback)
-  handle('hub:migrateScene', hub.migrateScene)
 
   handle('settings:get', settings.getSettings)
   handle('settings:save', settings.saveSettings)

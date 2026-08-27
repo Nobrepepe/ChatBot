@@ -91,6 +91,7 @@ export function makeWorld(over: Partial<World> = {}): World {
     sessionBackgroundPath: '',
     hubId: null,
     publicationId: null,
+    retiredAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...over
@@ -117,6 +118,7 @@ export function makeCharacter(over: Partial<Character> = {}): Character {
     tileImagePath: 'worlds/hv/ayame_tile.png',
     hubId: null,
     publicationId: null,
+    retiredAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...over
@@ -544,11 +546,7 @@ export function installFakeApi(seed: Partial<FakeStore> = {}): FakeApi {
     },
     'hub:activate': () => store.hub,
     'hub:cancelStaged': () => undefined,
-    'hub:rollback': () => store.hub,
-    'hub:migrateScene': (sid: number) => {
-      const scene = byId(store.scenes, sid)
-      if (scene) scene.publicationId = store.hub.publicationId
-    }
+    'hub:rollback': () => store.hub
   }
 
   const bridge: RendererApi = {

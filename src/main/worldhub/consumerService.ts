@@ -1,15 +1,18 @@
 /**
  * World Hub consumer.
  *
- * Each activated publication is imported as its own immutable set of canonical
- * rows (worlds, locations, characters, sprites, lore). Scenes pin the
- * publication that was active when they began, so existing conversations keep
- * their exact canon and retired characters stay visible in old conversations.
+ * A Hub entity has one row here for the life of the app, keyed by the permanent
+ * entity UUID the Hub issues (hub_id). Activating a publication updates the rows
+ * it matches rather than replacing them, so a scene, its memories and its notes
+ * stay attached to the character they were always about, however many times that
+ * character is republished. Entities a publication no longer carries are retired,
+ * not deleted: they stay resolvable for the conversations that used them.
+ *
  * All conversational and private data — scenes, messages, memories, personas,
  * notes, settings — remains app-owned and untouched by imports.
  */
 
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, openSync, fsyncSync, closeSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, openSync, fsyncSync, closeSync } from 'node:fs'
 import { join, extname } from 'node:path'
 import type { Database } from 'better-sqlite3'
 import { getDb } from '../db/connection'
@@ -45,7 +48,7 @@ export interface UpdatePreview {
   updatedCharacters: string[]
   retiredCharacters: string[]
   loreDocuments: number
-  pinnedScenes: number
+  continuingScenes: number
   alreadyActive: boolean
 }
 
@@ -180,15 +183,24 @@ export function preview(staged: StagedPackage): UpdatePreview {
   const selections = pkg.content['selections'] ?? {}
   const db = getDb()
 
+  const worldIds: string[] = selections['cb_worlds'] ?? []
   const knownWorlds = new Set(
-    (db.prepare('SELECT DISTINCT hub_id FROM worlds WHERE hub_id IS NOT NULL').all() as { hub_id: string }[]).map((r) => r.hub_id)
+    (db.prepare('SELECT hub_id FROM worlds WHERE hub_id IS NOT NULL').all() as { hub_id: string }[]).map((r) => r.hub_id)
   )
   const knownCharacters = new Set(
-    (db.prepare('SELECT DISTINCT hub_id FROM characters WHERE hub_id IS NOT NULL').all() as { hub_id: string }[]).map((r) => r.hub_id)
+    (db.prepare('SELECT hub_id FROM characters WHERE hub_id IS NOT NULL').all() as { hub_id: string }[]).map((r) => r.hub_id)
   )
-  const pinnedScenes = (
-    db.prepare('SELECT COUNT(*) AS n FROM scenes WHERE publication_id IS NOT NULL').get() as { n: number }
-  ).n
+  // Conversations that carry straight on, because their world is in this package.
+  const continuingScenes = worldIds.length
+    ? (
+        db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM scenes s JOIN worlds w ON w.id = s.world_id
+             WHERE w.hub_id IN (${worldIds.map(() => '?').join(', ')})`
+          )
+          .get(...worldIds) as { n: number }
+      ).n
+    : 0
 
   const result: UpdatePreview = {
     publicationId: pubIdOf(pkg),
@@ -200,11 +212,11 @@ export function preview(staged: StagedPackage): UpdatePreview {
     updatedCharacters: [],
     retiredCharacters: [],
     loreDocuments: pkg.documents.length,
-    pinnedScenes,
+    continuingScenes,
     alreadyActive: pubIdOf(pkg) === activePublicationId()
   }
 
-  for (const worldId of selections['cb_worlds'] ?? []) {
+  for (const worldId of worldIds) {
     if (!knownWorlds.has(worldId)) {
       result.addedWorlds.push(entities.get(worldId)?.['name'] ?? worldId)
     }
@@ -215,14 +227,11 @@ export function preview(staged: StagedPackage): UpdatePreview {
     if (knownCharacters.has(characterId)) result.updatedCharacters.push(name)
     else result.addedCharacters.push(name)
   }
-  const active = activePublicationId()
-  if (active) {
-    const rows = db
-      .prepare('SELECT name, hub_id FROM characters WHERE publication_id = ?')
-      .all(active) as { name: string; hub_id: string }[]
-    for (const row of rows) {
-      if (!castIds.has(row.hub_id)) result.retiredCharacters.push(row.name)
-    }
+  const live = db
+    .prepare('SELECT name, hub_id FROM characters WHERE hub_id IS NOT NULL AND retired_at IS NULL')
+    .all() as { name: string; hub_id: string }[]
+  for (const row of live) {
+    if (!castIds.has(row.hub_id)) result.retiredCharacters.push(row.name)
   }
   return result
 }
@@ -234,6 +243,14 @@ export function activate(staged: StagedPackage): HubStatus {
   const previousActive = activePublicationId()
   const mediaDir = join(hubMediaRoot(), publicationId)
   const db = getDb()
+  // Re-activating a publication writes into media that existing rows already
+  // point at, so a failure must not take it with it.
+  let mediaExisted = false
+  try {
+    mediaExisted = statSync(mediaDir).isDirectory()
+  } catch {
+    mediaExisted = false
+  }
 
   try {
     const importTx = db.transaction(() => {
@@ -266,10 +283,55 @@ export function activate(staged: StagedPackage): HubStatus {
     writePointer(publicationId, previousActive)
   } catch (err) {
     cleanupStaged(staged)
-    rmSync(mediaDir, { recursive: true, force: true })
+    if (!mediaExisted) rmSync(mediaDir, { recursive: true, force: true })
     throw err
   }
+  // Housekeeping only: the publication is already active, so a failure here
+  // must not read as a failed install.
+  try {
+    reclaimMedia(db)
+  } catch {
+    /* leave the old folders alone */
+  }
   return status()
+}
+
+/**
+ * Art is copied per publication, and rows now move to the newest one they
+ * appear in, so old publication folders are left with nothing pointing at
+ * them. Retired entities keep the folder holding the art they retired with.
+ */
+function reclaimMedia(db: Database): void {
+  const referenced = new Set<string>()
+  const sources: [string, string][] = [
+    ['worlds', 'cover_image_path'],
+    ['worlds', 'session_background_path'],
+    ['locations', 'background_path'],
+    ['characters', 'portrait_path'],
+    ['characters', 'tile_image_path'],
+    ['character_sprites', 'image_path']
+  ]
+  for (const [table, column] of sources) {
+    const rows = db
+      .prepare(`SELECT DISTINCT ${column} AS path FROM ${table} WHERE ${column} LIKE 'worldhub/%'`)
+      .all() as { path: string }[]
+    for (const row of rows) {
+      const folder = row.path.split('/')[1]
+      if (folder) referenced.add(folder)
+    }
+  }
+  let entries: string[]
+  try {
+    entries = readdirSync(hubMediaRoot(), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+  } catch {
+    return
+  }
+  for (const name of entries) {
+    if (referenced.has(name)) continue
+    rmSync(join(hubMediaRoot(), name), { recursive: true, force: true })
+  }
 }
 
 export function rollback(): HubStatus {
@@ -303,57 +365,6 @@ export function checkForUpdate(): UpdatePreview {
   }
 }
 
-/** Explicitly move one conversation to the active publication's canon. */
-export function migrateScene(sceneId: number): void {
-  const active = activePublicationId()
-  if (!active) throw new PackageError('No World Hub publication is active.')
-  const db = getDb()
-  const run = db.transaction(() => {
-    const scene = db.prepare('SELECT * FROM scenes WHERE id = ?').get(sceneId) as
-      | { id: number; world_id: number }
-      | undefined
-    if (!scene) throw new PackageError('That conversation no longer exists.')
-    const oldWorld = db.prepare('SELECT hub_id FROM worlds WHERE id = ?').get(scene.world_id) as
-      | { hub_id: string | null }
-      | undefined
-    const newWorld = db
-      .prepare('SELECT id FROM worlds WHERE publication_id = ? AND hub_id = ?')
-      .get(active, oldWorld?.hub_id ?? null) as { id: number } | undefined
-    if (!newWorld) {
-      throw new PackageError("The conversation's world is not part of the active publication.")
-    }
-    const characterRows = db
-      .prepare(
-        `SELECT c.id, c.hub_id, c.name FROM scene_characters sc
-         JOIN characters c ON c.id = sc.character_id WHERE sc.scene_id = ?`
-      )
-      .all(sceneId) as { id: number; hub_id: string | null; name: string }[]
-    const replacements: [number, number][] = []
-    for (const row of characterRows) {
-      const match = db
-        .prepare('SELECT id FROM characters WHERE publication_id = ? AND hub_id = ?')
-        .get(active, row.hub_id) as { id: number } | undefined
-      if (!match) {
-        throw new PackageError(
-          `“${row.name}” is not in the active publication; the conversation stays pinned.`
-        )
-      }
-      replacements.push([row.id, match.id])
-    }
-    db.prepare('UPDATE scenes SET world_id = ?, publication_id = ?, location_id = NULL WHERE id = ?').run(
-      newWorld.id,
-      active,
-      sceneId
-    )
-    for (const [oldId, newId] of replacements) {
-      db.prepare(
-        'UPDATE scene_characters SET character_id = ? WHERE scene_id = ? AND character_id = ?'
-      ).run(newId, sceneId, oldId)
-    }
-  })
-  run()
-}
-
 // -- import -------------------------------------------------------------------
 
 /** Copy one packaged file under the served media dir; returns the media-relative path. */
@@ -383,7 +394,8 @@ const KEYWORD_STOPWORDS = new Set([
  * Hub lore keyword derivation (deliberate improvement over the Flet app, which
  * imported lore with no keywords so it never matched): the document title plus
  * the names of the entities it references become the trigger keywords. Local
- * overrides in lore_keyword_overrides take precedence and survive re-import.
+ * overrides in lore_keyword_overrides are keyed by the document and take
+ * precedence, so tuning survives every re-import and every new publication.
  */
 function deriveLoreKeywords(title: string, entityNames: string[]): string[] {
   const keywords = new Set<string>()
@@ -407,7 +419,12 @@ const WIDE_RECIPES = ['tile_16x9', 'landscape_16x9']
 const PORTRAIT_RECIPES = ['portrait_3x4', 'portrait_9x16']
 const TILE_RECIPES = ['tile_16x9', 'square', 'thumbnail_square']
 
-function importContent(db: Database, pkg: PackageInfo, publicationId: string, mediaDir: string): void {
+function importContent(
+  db: Database,
+  pkg: PackageInfo,
+  publicationId: string,
+  mediaDir: string
+): void {
   const entities = entitiesById(pkg)
   const content = pkg.content
   const selections = content['selections'] ?? {}
@@ -422,19 +439,22 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
     return items[0]?.['assetId'] ?? null
   }
 
-  // Idempotent re-activation: this publication's rows are rebuilt, but rows
-  // still referenced by pinned scenes survive.
-  db.prepare('DELETE FROM lore_entries WHERE publication_id = ?').run(publicationId)
-  db.prepare('DELETE FROM locations WHERE publication_id = ?').run(publicationId)
-  db.prepare(
-    'DELETE FROM character_sprites WHERE character_id IN (SELECT id FROM characters WHERE publication_id = ?)'
-  ).run(publicationId)
-  db.prepare(
-    'DELETE FROM characters WHERE publication_id = ? AND id NOT IN (SELECT character_id FROM scene_characters)'
-  ).run(publicationId)
-  db.prepare(
-    'DELETE FROM worlds WHERE publication_id = ? AND id NOT IN (SELECT world_id FROM scenes)'
-  ).run(publicationId)
+  // Every write below is an upsert on hub_id: the entity keeps the row — and so
+  // the scenes, memories and notes that point at it — and gains this
+  // publication's content. Coming back from retirement is just retired_at = NULL.
+  const upsertWorld = db.prepare(
+    `INSERT INTO worlds (name, genre, tone, summary, setting_description, style_guide,
+     cover_image_path, session_background_path, hub_id, publication_id, retired_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+     ON CONFLICT(hub_id) WHERE hub_id IS NOT NULL DO UPDATE SET
+       name = excluded.name, genre = excluded.genre, tone = excluded.tone,
+       summary = excluded.summary, setting_description = excluded.setting_description,
+       style_guide = excluded.style_guide, cover_image_path = excluded.cover_image_path,
+       session_background_path = excluded.session_background_path,
+       publication_id = excluded.publication_id, retired_at = NULL,
+       updated_at = excluded.updated_at
+     RETURNING id`
+  )
 
   const worldLocalIds = new Map<string, number>()
   for (const hubWorldId of selections['cb_worlds'] ?? []) {
@@ -442,40 +462,53 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
     const profile = worldProfiles.get(hubWorldId) ?? {}
     const values = entityValues[hubWorldId] ?? {}
     const cover = copyMedia(pkg, mediaDir, setAsset('cb_world_cover', hubWorldId), WIDE_RECIPES)
-    const background = copyMedia(pkg, mediaDir, setAsset('session_background', hubWorldId), WIDE_RECIPES)
-    const info = db
-      .prepare(
-        `INSERT INTO worlds (name, genre, tone, summary, setting_description, style_guide,
-         cover_image_path, session_background_path, hub_id, publication_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        entity['name'],
-        profile['genre'] ?? '',
-        profile['tone'] ?? '',
-        entity['summary'] ?? '',
-        profile['settingDescription'] ?? '',
-        values['world_style_guide'] ?? '',
-        cover,
-        background,
-        hubWorldId,
-        publicationId,
-        ts,
-        ts
-      )
-    worldLocalIds.set(hubWorldId, Number(info.lastInsertRowid))
+    const background = copyMedia(
+      pkg,
+      mediaDir,
+      setAsset('session_background', hubWorldId),
+      WIDE_RECIPES
+    )
+    const row = upsertWorld.get(
+      entity['name'],
+      profile['genre'] ?? '',
+      profile['tone'] ?? '',
+      entity['summary'] ?? '',
+      profile['settingDescription'] ?? '',
+      values['world_style_guide'] ?? '',
+      cover,
+      background,
+      hubWorldId,
+      publicationId,
+      ts,
+      ts
+    ) as { id: number }
+    worldLocalIds.set(hubWorldId, row.id)
   }
 
-  for (const hubPlaceId of selections['places'] ?? []) {
+  const worldIds = [...worldLocalIds.values()]
+  const worldList = worldIds.map(() => '?').join(', ')
+
+  const upsertLocation = db.prepare(
+    `INSERT INTO locations (world_id, name, description, background_path, mood_tags, hub_id, publication_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(hub_id) WHERE hub_id IS NOT NULL DO UPDATE SET
+       world_id = excluded.world_id, name = excluded.name, description = excluded.description,
+       background_path = excluded.background_path, mood_tags = excluded.mood_tags,
+       publication_id = excluded.publication_id`
+  )
+  const placeIds: string[] = selections['places'] ?? []
+  for (const hubPlaceId of placeIds) {
     const entity = entities.get(hubPlaceId)!
     const values = entityValues[hubPlaceId] ?? {}
     const worldLocal = worldLocalIds.get(entity['worldId'])
     if (worldLocal === undefined) continue
-    const background = copyMedia(pkg, mediaDir, setAsset('location_background', hubPlaceId), WIDE_RECIPES)
-    db.prepare(
-      `INSERT INTO locations (world_id, name, description, background_path, mood_tags, hub_id, publication_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(
+    const background = copyMedia(
+      pkg,
+      mediaDir,
+      setAsset('location_background', hubPlaceId),
+      WIDE_RECIPES
+    )
+    upsertLocation.run(
       worldLocal,
       entity['name'],
       entity['summary'] ?? '',
@@ -485,6 +518,24 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
       publicationId
     )
   }
+
+  const upsertCharacter = db.prepare(
+    `INSERT INTO characters (world_id, name, nicknames, age, role, summary, appearance,
+     personality, backstory, behavior_rules, voice_style, relationship_to_user,
+     ai_instructions, portrait_path, tile_image_path, hub_id, publication_id, retired_at,
+     created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+     ON CONFLICT(hub_id) WHERE hub_id IS NOT NULL DO UPDATE SET
+       world_id = excluded.world_id, name = excluded.name, nicknames = excluded.nicknames,
+       age = excluded.age, role = excluded.role, summary = excluded.summary,
+       appearance = excluded.appearance, personality = excluded.personality,
+       backstory = excluded.backstory, behavior_rules = excluded.behavior_rules,
+       voice_style = excluded.voice_style, relationship_to_user = excluded.relationship_to_user,
+       ai_instructions = excluded.ai_instructions, portrait_path = excluded.portrait_path,
+       tile_image_path = excluded.tile_image_path, publication_id = excluded.publication_id,
+       retired_at = NULL, updated_at = excluded.updated_at
+     RETURNING id`
+  )
 
   for (const hubCharacterId of selections['cast'] ?? []) {
     const entity = entities.get(hubCharacterId)!
@@ -501,7 +552,9 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
     const sprites: { expression: string; assetId: string }[] = (
       assetSets[`sprites:${hubCharacterId}`] ?? []
     ).map((s: Record<string, any>) => ({
-      expression: String(s['values']?.['expression'] ?? '').trim().toLowerCase(),
+      expression: String(s['values']?.['expression'] ?? '')
+        .trim()
+        .toLowerCase(),
       assetId: s['assetId']
     }))
     let portraitPath = ''
@@ -509,38 +562,38 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
     if (neutral) {
       portraitPath = copyMedia(pkg, mediaDir, neutral.assetId, PORTRAIT_RECIPES)
     } else if (profile['portraitAssetId']) {
-      portraitPath = copyMedia(pkg, mediaDir, profile['portraitAssetId'], [...PORTRAIT_RECIPES, 'square'])
+      portraitPath = copyMedia(pkg, mediaDir, profile['portraitAssetId'], [
+        ...PORTRAIT_RECIPES,
+        'square'
+      ])
     }
 
-    const info = db
-      .prepare(
-        `INSERT INTO characters (world_id, name, nicknames, age, role, summary, appearance,
-         personality, backstory, behavior_rules, voice_style, relationship_to_user,
-         ai_instructions, portrait_path, tile_image_path, hub_id, publication_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        worldLocal,
-        entity['name'],
-        (entity['aliases'] ?? []).join(', '),
-        profile['age'] ?? '',
-        profile['role'] ?? '',
-        entity['summary'] ?? '',
-        profile['appearance'] ?? '',
-        profile['personality'] ?? '',
-        profile['biography'] ?? '',
-        values['char_behavior_rules'] ?? '',
-        profile['voice'] ?? '',
-        values['char_relationship_to_user'] ?? '',
-        values['char_ai_instructions'] ?? '',
-        portraitPath,
-        tile,
-        hubCharacterId,
-        publicationId,
-        ts,
-        ts
-      )
-    const localCharacter = Number(info.lastInsertRowid)
+    const row = upsertCharacter.get(
+      worldLocal,
+      entity['name'],
+      (entity['aliases'] ?? []).join(', '),
+      profile['age'] ?? '',
+      profile['role'] ?? '',
+      entity['summary'] ?? '',
+      profile['appearance'] ?? '',
+      profile['personality'] ?? '',
+      profile['biography'] ?? '',
+      values['char_behavior_rules'] ?? '',
+      profile['voice'] ?? '',
+      values['char_relationship_to_user'] ?? '',
+      values['char_ai_instructions'] ?? '',
+      portraitPath,
+      tile,
+      hubCharacterId,
+      publicationId,
+      ts,
+      ts
+    ) as { id: number }
+    const localCharacter = row.id
+
+    // Sprites are pure content and the character id is stable, so the set is
+    // simply replaced: an expression dropped upstream disappears here too.
+    db.prepare('DELETE FROM character_sprites WHERE character_id = ?').run(localCharacter)
     let order = 0
     for (const sprite of sprites) {
       if (sprite.expression === 'neutral' || !sprite.expression) continue
@@ -551,7 +604,8 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
       db.prepare(
         `INSERT INTO character_sprites (character_id, name, call_sign, image_path, sort_order)
          VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(character_id, call_sign) DO UPDATE SET image_path = excluded.image_path`
+         ON CONFLICT(character_id, call_sign) DO UPDATE SET
+           image_path = excluded.image_path, sort_order = excluded.sort_order`
       ).run(
         localCharacter,
         sprite.expression.charAt(0).toUpperCase() + sprite.expression.slice(1),
@@ -563,6 +617,16 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
   }
 
   // Linked Hub Markdown replaces published lore entries for these worlds.
+  const upsertLore = db.prepare(
+    `INSERT INTO lore_entries (world_id, title, content, keywords_json, always_include,
+     hub_id, publication_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
+     ON CONFLICT(hub_id) WHERE hub_id IS NOT NULL DO UPDATE SET
+       world_id = excluded.world_id, title = excluded.title, content = excluded.content,
+       keywords_json = excluded.keywords_json, publication_id = excluded.publication_id,
+       updated_at = excluded.updated_at`
+  )
+  const documentIds: string[] = []
   for (const document of pkg.documents) {
     const body = readFileSync(packageAbsolute(pkg, document['path']), 'utf8')
     let targetWorld: number | undefined
@@ -577,12 +641,48 @@ function importContent(db: Database, pkg: PackageInfo, publicationId: string, me
     }
     if (targetWorld === undefined) continue
     const keywords = deriveLoreKeywords(String(document['title'] ?? ''), referencedNames)
-    db.prepare(
-      `INSERT INTO lore_entries (world_id, title, content, keywords_json, always_include,
-       hub_id, publication_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`
-    ).run(targetWorld, document['title'], body, JSON.stringify(keywords), document['id'], publicationId, ts, ts)
+    upsertLore.run(
+      targetWorld,
+      document['title'],
+      body,
+      JSON.stringify(keywords),
+      document['id'],
+      publicationId,
+      ts,
+      ts
+    )
+    documentIds.push(document['id'])
   }
+
+  // Places and lore are pure content with nothing hanging off them, so what the
+  // publication drops is dropped here. Worlds and characters are identities and
+  // are only ever retired — see below.
+  if (worldIds.length) {
+    db.prepare(
+      `DELETE FROM locations WHERE world_id IN (${worldList}) AND hub_id IS NOT NULL
+       AND hub_id NOT IN (${placeIds.map(() => '?').join(', ') || 'NULL'})`
+    ).run(...worldIds, ...placeIds)
+    db.prepare(
+      `DELETE FROM lore_entries WHERE world_id IN (${worldList}) AND hub_id IS NOT NULL
+       AND hub_id NOT IN (${documentIds.map(() => '?').join(', ') || 'NULL'})`
+    ).run(...worldIds, ...documentIds)
+  }
+
+  retire(db, 'worlds', selections['cb_worlds'] ?? [], ts)
+  retire(db, 'characters', selections['cast'] ?? [], ts)
+}
+
+/**
+ * Whatever this publication no longer carries stops being canon without being
+ * destroyed: it drops out of the pickers and keeps answering for the
+ * conversations, memories and notes that already point at it.
+ */
+function retire(db: Database, table: 'worlds' | 'characters', present: string[], ts: string): void {
+  const placeholders = present.map(() => '?').join(', ') || 'NULL'
+  db.prepare(
+    `UPDATE ${table} SET retired_at = ?
+     WHERE hub_id IS NOT NULL AND retired_at IS NULL AND hub_id NOT IN (${placeholders})`
+  ).run(ts, ...present)
 }
 
 // -- receipts and pointer -----------------------------------------------------

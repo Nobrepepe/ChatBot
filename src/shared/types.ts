@@ -47,6 +47,8 @@ export interface World {
   sessionBackgroundPath: string
   hubId: string | null
   publicationId: string | null
+  /** Set when the active publication no longer carries this world. */
+  retiredAt: string | null
   createdAt: string
   updatedAt: string
 }
@@ -81,6 +83,8 @@ export interface Character {
   tileImagePath: string
   hubId: string | null
   publicationId: string | null
+  /** Set when the active publication no longer carries this character. */
+  retiredAt: string | null
   createdAt: string
   updatedAt: string
 }

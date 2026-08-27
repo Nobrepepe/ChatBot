@@ -69,7 +69,7 @@ export interface HubUpdatePreview {
   updatedCharacters: string[]
   retiredCharacters: string[]
   loreDocuments: number
-  pinnedScenes: number
+  continuingScenes: number
   alreadyActive: boolean
 }
 
@@ -185,7 +185,6 @@ export interface IpcMethods {
   'hub:activate': (stagedId: number) => HubStatus
   'hub:cancelStaged': (stagedId: number) => void
   'hub:rollback': () => HubStatus
-  'hub:migrateScene': (sceneId: number) => void
 
   'settings:get': () => AppSettings
   'settings:save': (values: Partial<AppSettings>) => void

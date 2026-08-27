@@ -37,14 +37,14 @@ export default function WorldHubSection(): React.JSX.Element {
           ) : null}
           {preview.retiredCharacters.length ? (
             <p className="body-text">
-              Characters retiring (old conversations keep them):{' '}
-              {preview.retiredCharacters.join(', ')}.
+              Characters leaving the canon (the scenes and memories they are already in keep
+              them): {preview.retiredCharacters.join(', ')}.
             </p>
           ) : null}
           <p className="body-text">
             {preview.loreDocuments} lore document{preview.loreDocuments === 1 ? '' : 's'} included.
-            {preview.pinnedScenes > 0
-              ? ` ${preview.pinnedScenes} existing conversation${preview.pinnedScenes === 1 ? ' stays' : 's stay'} pinned to the canon they began with.`
+            {preview.continuingScenes > 0
+              ? ` ${preview.continuingScenes} conversation${preview.continuingScenes === 1 ? '' : 's'} already under way carr${preview.continuingScenes === 1 ? 'ies' : 'y'} straight on into the new revision.`
               : ''}
           </p>
           <p className="caption">

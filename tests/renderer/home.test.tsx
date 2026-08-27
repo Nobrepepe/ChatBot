@@ -52,6 +52,29 @@ describe('the home screen with a world but no scene', () => {
   })
 })
 
+describe('a world the Hub has stopped publishing', () => {
+  beforeEach(() => {
+    api.store.worlds.push(
+      makeWorld({ id: 1, name: 'Hidden Village', retiredAt: '2026-08-01T00:00:00.000Z' })
+    )
+    api.store.scenes.push(makeScene({ id: 5, worldId: 1, title: 'The rooftop' }))
+  })
+
+  it('still lists it, and says why it is there', async () => {
+    const view = renderRoute('/')
+    const row = await screen.findByRole('button', { name: /Hidden Village/ })
+    expect(row).toHaveTextContent('No longer published — its scenes still open')
+    await userEvent.click(row)
+    await waitFor(() => expect(view.path()).toBe('/world/1'))
+  })
+
+  it('offers the way back into the scene it holds', async () => {
+    renderRoute('/')
+    expect(await screen.findByText('Hidden Village is still mid-scene.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Return to The rooftop/ })).toBeInTheDocument()
+  })
+})
+
 describe('the home screen mid-scene', () => {
   beforeEach(() => {
     api.store.worlds.push(makeWorld({ id: 1, name: 'Hidden Village' }))

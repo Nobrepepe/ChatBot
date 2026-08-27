@@ -125,7 +125,11 @@ export default function HomeScreen(): React.JSX.Element {
               )}
               <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <span className="row-title">{world.name}</span>
-                <span className="caption">{world.genre || 'No genre yet'}</span>
+                <span className="caption">
+                  {world.retiredAt
+                    ? 'No longer published — its scenes still open'
+                    : world.genre || 'No genre yet'}
+                </span>
               </span>
             </button>
             <Rule end={55 + ((world.id * 7) % 30)} />

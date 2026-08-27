@@ -20,6 +20,35 @@ beforeEach(() => {
 const castTile = (name: string): HTMLElement =>
   screen.getByRole('button', { name: new RegExp(`${name}\\s*(in|not in) this scene`) })
 
+describe('a character the Hub has stopped publishing', () => {
+  const RETIRED = '2026-08-01T00:00:00.000Z'
+
+  it('is not offered to a new scene', async () => {
+    api = installFakeApi({
+      worlds: [makeWorld({ id: 1 })],
+      characters: [
+        makeCharacter({ id: 10, worldId: 1, name: 'Ayame' }),
+        makeCharacter({ id: 11, worldId: 1, name: 'Kaguya', retiredAt: RETIRED })
+      ]
+    })
+    renderRoute('/world/1/scene/new')
+    expect(await screen.findByRole('button', { name: /Ayame/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Kaguya/ })).not.toBeInTheDocument()
+  })
+
+  it('is still offered to a scene being continued that already had them', async () => {
+    api = installFakeApi({
+      worlds: [makeWorld({ id: 1 })],
+      characters: [
+        makeCharacter({ id: 10, worldId: 1, name: 'Ayame' }),
+        makeCharacter({ id: 11, worldId: 1, name: 'Kaguya', retiredAt: RETIRED })
+      ]
+    })
+    renderRoute('/world/1/scene/new', { characterIds: [11], title: 'Part two' })
+    expect(await screen.findByRole('button', { name: /Kaguya/ })).toHaveTextContent('in this scene')
+  })
+})
+
 describe('choosing a cast', () => {
   it('starts with nobody chosen and says so in words', async () => {
     renderRoute('/world/1/scene/new')

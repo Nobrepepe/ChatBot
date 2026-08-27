@@ -30,14 +30,16 @@ function mapLore(r: LoreRow): LoreEntry {
   }
 }
 
-/** Hub lore keeps local keyword tuning in lore_keyword_overrides. */
+/**
+ * Hub lore keeps local keyword tuning in lore_keyword_overrides, keyed by the
+ * document itself — the tuning belongs to the writer, not to the revision it
+ * was first typed against, so a new publication does not undo it.
+ */
 function effectiveKeywords(r: LoreRow): string[] {
-  if (r.hub_id && r.publication_id) {
+  if (r.hub_id) {
     const override = getDb()
-      .prepare(
-        'SELECT keywords_json FROM lore_keyword_overrides WHERE hub_id = ? AND publication_id = ?'
-      )
-      .get(r.hub_id, r.publication_id) as { keywords_json: string } | undefined
+      .prepare('SELECT keywords_json FROM lore_keyword_overrides WHERE hub_id = ?')
+      .get(r.hub_id) as { keywords_json: string } | undefined
     if (override) return parseJsonArray(override.keywords_json)
   }
   return parseJsonArray(r.keywords_json)
@@ -55,16 +57,16 @@ export function saveLoreEntry(draft: LoreDraft): number {
   const ts = now()
   const keywords = JSON.stringify((draft.keywords ?? []).map((k) => k.trim()).filter(Boolean))
   if (draft.id) {
-    const existing = db.prepare('SELECT hub_id, publication_id FROM lore_entries WHERE id = ?').get(draft.id) as
-      | { hub_id: string | null; publication_id: string | null }
+    const existing = db.prepare('SELECT hub_id FROM lore_entries WHERE id = ?').get(draft.id) as
+      | { hub_id: string | null }
       | undefined
-    if (existing?.hub_id && existing.publication_id) {
+    if (existing?.hub_id) {
       // Hub lore content is immutable; only the keyword tuning is writable, locally.
       db.prepare(
-        `INSERT INTO lore_keyword_overrides (hub_id, publication_id, keywords_json)
-         VALUES (?, ?, ?)
-         ON CONFLICT(hub_id, publication_id) DO UPDATE SET keywords_json = excluded.keywords_json`
-      ).run(existing.hub_id, existing.publication_id, keywords)
+        `INSERT INTO lore_keyword_overrides (hub_id, keywords_json)
+         VALUES (?, ?)
+         ON CONFLICT(hub_id) DO UPDATE SET keywords_json = excluded.keywords_json`
+      ).run(existing.hub_id, keywords)
       return draft.id
     }
     db.prepare(

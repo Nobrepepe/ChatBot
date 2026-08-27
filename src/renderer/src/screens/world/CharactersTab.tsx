@@ -55,7 +55,13 @@ export default function CharactersTab({ world }: { world: World }): React.JSX.El
                 <ArtPlaceholder label="NO PORTRAIT" aspect="16/9" />
               )}
               <span className="row-title">{c.name}</span>
-              <span className="caption">{empty ? 'Profile empty' : c.role || ' '}</span>
+              <span className="caption">
+                {c.retiredAt
+                  ? 'No longer published'
+                  : empty
+                    ? 'Profile empty'
+                    : c.role || ' '}
+              </span>
             </button>
           )
         })}

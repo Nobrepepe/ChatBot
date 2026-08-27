@@ -78,7 +78,7 @@ describe('database schema', () => {
     ).run(ts, ts)
 
     migrate(db)
-    expect(db.pragma('user_version', { simple: true })).toBe(2)
+    expect(db.pragma('user_version', { simple: true })).toBe(3)
 
     // A premise that was not already the title survives as the opening context.
     const scenes = db.prepare('SELECT title, previously_on FROM scenes ORDER BY id').all() as {
@@ -102,6 +102,85 @@ describe('database schema', () => {
       .prepare('SELECT action_type, target_memory_id, status FROM memory_suggestions')
       .all() as { action_type: string; target_memory_id: number; status: string }[]
     expect(proposals).toEqual([{ action_type: 'create', target_memory_id: 2, status: 'pending' }])
+
+    db.close()
+  })
+
+  it('collapses the duplicate rows a version 2 database accumulated, keeping what hung off them', async () => {
+    const { default: Database } = await import('better-sqlite3')
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const read = (name: string): string =>
+      readFileSync(
+        fileURLToPath(new URL(`../../src/main/db/migrations/${name}`, import.meta.url)),
+        'utf8'
+      )
+
+    const db = new Database(':memory:')
+    db.exec(read('001_init.sql'))
+    db.exec(read('002_scenes_and_memory_proposals.sql'))
+    db.pragma('user_version = 2')
+
+    // What version 2 left behind: one entity, one row per publication, and the
+    // conversation attached to the copy the older publication imported.
+    const ts = '2026-01-01T00:00:00.000Z'
+    db.prepare(
+      "INSERT INTO settings (key, value) VALUES ('worldhubActivePublication', 'pub2')"
+    ).run()
+    db.prepare(
+      `INSERT INTO worlds (name, hub_id, publication_id, created_at, updated_at)
+       VALUES ('Emberfall', 'w1', 'pub1', ?, ?), ('Emberfall Reborn', 'w1', 'pub2', ?, ?)`
+    ).run(ts, ts, ts, ts)
+    db.prepare(
+      `INSERT INTO characters (world_id, name, hub_id, publication_id, created_at, updated_at)
+       VALUES (1, 'Ash', 'c1', 'pub1', ?, ?), (2, 'Ashley', 'c1', 'pub2', ?, ?)`
+    ).run(ts, ts, ts, ts)
+    db.prepare(
+      "INSERT INTO scenes (world_id, title, publication_id, created_at, updated_at) VALUES (1, 'Stranded', 'pub1', ?, ?)"
+    ).run(ts, ts)
+    db.prepare(
+      'INSERT INTO scene_characters (scene_id, character_id, sort_order) VALUES (1, 1, 0)'
+    ).run()
+    db.prepare(
+      "INSERT INTO messages (scene_id, role, character_id, content, created_at) VALUES (1, 'character', 1, 'Hello.', ?)"
+    ).run(ts)
+    db.prepare(
+      "INSERT INTO memories (character_id, type, content, created_at) VALUES (1, 'canon', 'Ash cannot swim.', ?)"
+    ).run(ts)
+    db.prepare(
+      "INSERT INTO world_notes (world_id, title, created_at, updated_at) VALUES (1, 'Private', ?, ?)"
+    ).run(ts, ts)
+
+    migrate(db)
+    expect(db.pragma('user_version', { simple: true })).toBe(3)
+
+    // One row per entity, holding the active publication's content.
+    const world = db.prepare("SELECT * FROM worlds WHERE hub_id = 'w1'").all() as any[]
+    expect(world).toHaveLength(1)
+    expect(world[0].name).toBe('Emberfall Reborn')
+    expect(world[0].publication_id).toBe('pub2')
+    expect(world[0].retired_at).toBeNull()
+    const character = db.prepare("SELECT * FROM characters WHERE hub_id = 'c1'").all() as any[]
+    expect(character).toHaveLength(1)
+    expect(character[0].name).toBe('Ashley')
+
+    // And everything that pointed at the older copy now points at that row.
+    const scene = db.prepare('SELECT world_id FROM scenes WHERE id = 1').get() as {
+      world_id: number
+    }
+    expect(scene.world_id).toBe(world[0].id)
+    expect(
+      (
+        db.prepare('SELECT character_id FROM scene_characters WHERE scene_id = 1').all() as any[]
+      ).map((r) => r.character_id)
+    ).toEqual([character[0].id])
+    expect((db.prepare('SELECT character_id FROM messages').get() as any).character_id).toBe(
+      character[0].id
+    )
+    expect((db.prepare('SELECT character_id FROM memories').get() as any).character_id).toBe(
+      character[0].id
+    )
+    expect((db.prepare('SELECT world_id FROM world_notes').get() as any).world_id).toBe(world[0].id)
 
     db.close()
   })
@@ -154,20 +233,28 @@ describe('worlds repository', () => {
     expect(() => worlds.deleteWorld(id)).toThrow(/read-only/)
   })
 
-  it('filters worlds to the active publication in hub mode', () => {
+  it('lists the current canon, and keeps a retired world only while it holds a scene', () => {
     const localId = worlds.saveWorld({ name: 'Local' })
     const db = getDb()
     const ts = new Date().toISOString()
     db.prepare(
-      `INSERT INTO worlds (name, hub_id, publication_id, created_at, updated_at)
-       VALUES ('HubV1', 'w1', 'pub1', ?, ?), ('HubV2', 'w1', 'pub2', ?, ?)`
-    ).run(ts, ts, ts, ts)
+      `INSERT INTO worlds (name, hub_id, publication_id, retired_at, created_at, updated_at)
+       VALUES ('Current', 'w1', 'pub2', NULL, ?, ?),
+              ('Played in', 'w2', 'pub1', ?, ?, ?),
+              ('Never played in', 'w3', 'pub1', ?, ?, ?)`
+    ).run(ts, ts, ts, ts, ts, ts, ts, ts)
+    const playedIn = db.prepare("SELECT id FROM worlds WHERE hub_id = 'w2'").get() as { id: number }
+    db.prepare(
+      `INSERT INTO scenes (world_id, title, created_at, updated_at) VALUES (?, 'A scene', ?, ?)`
+    ).run(playedIn.id, ts, ts)
 
-    settings.saveSetting(settings.ACTIVE_PUBLICATION_KEY, 'pub2')
     const names = worlds.listWorlds().map((w) => w.name)
-    expect(names).toContain('HubV2')
+    expect(names).toContain('Current')
     expect(names).toContain('Local')
-    expect(names).not.toContain('HubV1')
+    // Retired, but a conversation still lives there — so it stays reachable, last.
+    expect(names).toContain('Played in')
+    expect(names.indexOf('Played in')).toBe(names.length - 1)
+    expect(names).not.toContain('Never played in')
     expect(worlds.listWorlds().find((w) => w.name === 'Local')?.id).toBe(localId)
   })
 })

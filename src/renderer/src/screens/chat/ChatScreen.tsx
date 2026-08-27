@@ -65,7 +65,6 @@ export default function ChatScreen(): React.JSX.Element {
   const messagesQuery = useIpcQuery('messages:list', sceneId)
   const settingsQuery = useIpcQuery('settings:get')
   const personasQuery = useIpcQuery('personas:list')
-  const hubStatus = useIpcQuery('hub:status')
 
   const world = worldQuery.data ?? null
   const cast: Character[] = useMemo(
@@ -77,6 +76,7 @@ export default function ChatScreen(): React.JSX.Element {
   )
   const multi = cast.length > 1
   const castNames = useMemo(() => cast.map((c) => c.name), [cast])
+  const retiredCast = useMemo(() => cast.filter((c) => c.retiredAt), [cast])
   const persona = scene?.personaId
     ? (personasQuery.data ?? []).find((p) => p.id === scene.personaId)
     : undefined
@@ -503,25 +503,11 @@ export default function ChatScreen(): React.JSX.Element {
         <h1 className="display" style={{ fontSize: 'var(--size-display-m)' }}>
           {scene.title || 'Untitled scene'}
         </h1>
-        {hubStatus.data?.hubMode &&
-        scene.publicationId &&
-        scene.publicationId !== hubStatus.data.publicationId ? (
-          <span style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'baseline', flexWrap: 'wrap' }}>
-            <span className="caption">This conversation is pinned to the canon it began with.</span>
-            <TextAction
-              kind="secondary"
-              onClick={async () => {
-                try {
-                  await call('hub:migrateScene', sceneId)
-                  snack('The conversation now uses the current canon.')
-                  client.invalidateQueries()
-                } catch (err) {
-                  snack((err as Error).message, true)
-                }
-              }}
-            >
-              Move it to the current canon →
-            </TextAction>
+        {retiredCast.length ? (
+          <span className="caption">
+            {retiredCast.map((c) => c.name).join(' and ')}{' '}
+            {retiredCast.length === 1 ? 'is' : 'are'} no longer in the published canon — this scene
+            keeps {retiredCast.length === 1 ? 'them' : 'them all'}.
           </span>
         ) : null}
       </div>

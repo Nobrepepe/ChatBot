@@ -21,6 +21,7 @@ interface CharacterRow {
   tile_image_path: string
   hub_id: string | null
   publication_id: string | null
+  retired_at: string | null
   created_at: string
   updated_at: string
 }
@@ -45,14 +46,21 @@ function mapCharacter(r: CharacterRow): Character {
     tileImagePath: r.tile_image_path,
     hubId: r.hub_id,
     publicationId: r.publication_id,
+    retiredAt: r.retired_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   }
 }
 
+/**
+ * The whole cast of a world, retired members included and marked — a scene that
+ * already has one still needs to name them. Pickers are what filter them out.
+ */
 export function listCharacters(worldId: number): Character[] {
   const rows = getDb()
-    .prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY name')
+    .prepare(
+      'SELECT * FROM characters WHERE world_id = ? ORDER BY (retired_at IS NOT NULL), name'
+    )
     .all(worldId) as CharacterRow[]
   return rows.map(mapCharacter)
 }

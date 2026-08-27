@@ -25,6 +25,7 @@ const world: World = {
   sessionBackgroundPath: '',
   hubId: null,
   publicationId: null,
+  retiredAt: null,
   createdAt: '',
   updatedAt: ''
 }
@@ -49,6 +50,7 @@ function makeCharacter(id: number, name: string, extra: Partial<Character> = {})
     tileImagePath: '',
     hubId: null,
     publicationId: null,
+    retiredAt: null,
     createdAt: '',
     updatedAt: '',
     ...extra

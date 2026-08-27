@@ -1,6 +1,5 @@
 import { getDb } from '../connection'
 import type { World, WorldDraft } from '@shared/types'
-import { activePublicationId } from './settings'
 import { assertNotHubManaged, now } from './util'
 
 interface WorldRow {
@@ -15,6 +14,7 @@ interface WorldRow {
   session_background_path: string
   hub_id: string | null
   publication_id: string | null
+  retired_at: string | null
   created_at: string
   updated_at: string
 }
@@ -32,26 +32,25 @@ function mapWorld(r: WorldRow): World {
     sessionBackgroundPath: r.session_background_path,
     hubId: r.hub_id,
     publicationId: r.publication_id,
+    retiredAt: r.retired_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   }
 }
 
 /**
- * Canonical worlds: local rows in legacy mode, the active publication's rows in
- * Hub mode. Pinned scenes resolve their world by id, so older rows stay reachable.
+ * Every world the writer can still get to: the current canon, plus any world
+ * the Hub has stopped publishing that still holds a scene — those come last.
+ * A retired world with nothing played in it simply stops being listed.
  */
 export function listWorlds(): World[] {
-  const active = activePublicationId()
-  const rows = active
-    ? (getDb()
-        .prepare(
-          'SELECT * FROM worlds WHERE publication_id = ? OR publication_id IS NULL ORDER BY name'
-        )
-        .all(active) as WorldRow[])
-    : (getDb()
-        .prepare('SELECT * FROM worlds WHERE publication_id IS NULL ORDER BY name')
-        .all() as WorldRow[])
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM worlds
+       WHERE retired_at IS NULL OR id IN (SELECT world_id FROM scenes)
+       ORDER BY (retired_at IS NOT NULL), name`
+    )
+    .all() as WorldRow[]
   return rows.map(mapWorld)
 }
 

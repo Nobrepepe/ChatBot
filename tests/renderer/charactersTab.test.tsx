@@ -35,6 +35,24 @@ describe('browsing a world’s characters', () => {
     expect(artInside(tile('Kaguya'))!.className).not.toContain('art-ghost')
   })
 
+  it('keeps a character the Hub has stopped publishing, and says so', async () => {
+    api = installFakeApi({
+      worlds: [makeWorld({ id: 1 })],
+      characters: [
+        makeCharacter({ id: 10, worldId: 1, name: 'Ayame' }),
+        makeCharacter({
+          id: 11,
+          worldId: 1,
+          name: 'Kaguya',
+          role: 'Envoy',
+          retiredAt: '2026-08-01T00:00:00.000Z'
+        })
+      ]
+    })
+    renderRoute('/world/1/characters')
+    expect(await screen.findByTitle('Open Kaguya')).toHaveTextContent('No longer published')
+  })
+
   it('states an unwritten profile in words instead', async () => {
     renderRoute('/world/1/characters')
     await screen.findByTitle('Open Ayame')

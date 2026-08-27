@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { cpSync, mkdirSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { useTempDataDir } from './helpers'
-import { getDb } from '@main/db/connection'
 import * as hub from '@main/worldhub/consumerService'
 import { PackageError } from '@main/worldhub/packageReader'
 import * as worldsRepo from '@main/db/repo/worlds'
@@ -82,11 +81,12 @@ describe('installing a publication', () => {
   })
 })
 
-describe('updates and pinning', () => {
+describe('updates and continuity', () => {
   async function installV1WithPrivateData(): Promise<{
     sceneId: number
     worldId: number
     characterId: number
+    characterHubId: string
     personaId: number
     noteId: number
   }> {
@@ -97,43 +97,82 @@ describe('updates and pinning', () => {
     const personaId = personasRepo.savePersona({ name: 'Rui', description: 'A scribe.' })
     const sceneId = scenesRepo.saveScene({
       worldId: world.id,
-      title: 'Pinned scene',
+      title: 'Continuing scene',
       characterIds: characters.map((c) => c.id),
       personaId
     })
     messagesRepo.addMessage({ sceneId, role: 'user', content: 'hello' })
     memoriesRepo.saveMemory({ characterId: character.id, type: 'canon', content: 'A fact.' })
     const noteId = notesRepo.saveWorldNote({ worldId: world.id, title: 'Private', content: 'note' })
-    return { sceneId, worldId: world.id, characterId: character.id, personaId, noteId }
+    return {
+      sceneId,
+      worldId: world.id,
+      characterId: character.id,
+      characterHubId: character.hubId!,
+      personaId,
+      noteId
+    }
   }
 
-  it('preserves private data across an update and keeps the scene pinned to v1', async () => {
+  it('carries the conversation, its memories and its notes into the new revision', async () => {
     const ids = await installV1WithPrivateData()
     await activateZip('valid-v2.zip')
 
     expect(settingsRepo.activePublicationId()).toBe(expected.publicationV2)
-    // Private data survived untouched.
+
+    // The world and the character are the same rows, now holding v2's content.
+    const world = worldsRepo.getWorld(ids.worldId)!
+    expect(world.publicationId).toBe(expected.publicationV2)
+    expect(world.retiredAt).toBeNull()
+    const character = charactersRepo.getCharacter(ids.characterId)!
+    expect(character.hubId).toBe(ids.characterHubId)
+    expect(character.publicationId).toBe(expected.publicationV2)
+
+    // So everything hanging off them came with, and the scene is still listed.
     expect(messagesRepo.listMessages(ids.sceneId)).toHaveLength(1)
     expect(memoriesRepo.listMemories(ids.characterId, { lifecycle: 'any' })).toHaveLength(1)
     expect(personasRepo.getPersona(ids.personaId)).not.toBeNull()
     expect(notesRepo.getWorldNote(ids.noteId)).not.toBeNull()
+    expect(notesRepo.listWorldNotes(ids.worldId)).toHaveLength(1)
+    expect(worldsRepo.listWorlds().map((w) => w.id)).toContain(ids.worldId)
+    expect(scenesRepo.listScenes(ids.worldId).map((s) => s.id)).toContain(ids.sceneId)
+  })
 
-    // The scene still resolves its original v1 rows.
-    const scene = scenesRepo.getScene(ids.sceneId)!
-    expect(scene.publicationId).toBe(expected.publicationV1)
-    const pinnedWorld = worldsRepo.getWorld(scene.worldId)!
-    expect(pinnedWorld.publicationId).toBe(expected.publicationV1)
+  it('renames in place rather than forking the character', async () => {
+    await activateZip('valid-v1.zip')
+    const worldId = worldsRepo.listWorlds()[0]!.id
+    const before = charactersRepo
+      .listCharacters(worldId)
+      .find((c) => c.hubId === expected.renamedCharacterId)!
+    await activateZip('valid-v2.zip')
+    const after = charactersRepo.getCharacter(before.id)!
+    expect(after.hubId).toBe(expected.renamedCharacterId)
+    expect(
+      charactersRepo.listCharacters(worldId).filter((c) => c.hubId === expected.renamedCharacterId)
+    ).toHaveLength(1)
+  })
 
-    // Canonical listings show v2; retired characters disappear from them but
-    // remain fetchable by id for old conversations.
-    const canonWorlds = worldsRepo.listWorlds()
-    const v2World = canonWorlds.find((w) => w.publicationId === expected.publicationV2)!
-    const v2Characters = charactersRepo.listCharacters(v2World.id)
-    for (const retired of expected.retiredCharacterIds) {
-      expect(v2Characters.some((c) => c.hubId === retired)).toBe(false)
+  it('retires dropped characters instead of removing them', async () => {
+    const ids = await installV1WithPrivateData()
+    const retiredBefore = charactersRepo
+      .listCharacters(ids.worldId)
+      .filter((c) => c.hubId && expected.retiredCharacterIds.includes(c.hubId))
+    expect(retiredBefore.length).toBeGreaterThan(0)
+
+    await activateZip('valid-v2.zip')
+
+    // Still there, still in the scene's cast, and marked so the UI can say so.
+    const cast = scenesRepo.getScene(ids.sceneId)!.characterIds
+    for (const character of retiredBefore) {
+      const after = charactersRepo.getCharacter(character.id)!
+      expect(after.retiredAt).not.toBeNull()
+      expect(cast).toContain(character.id)
     }
-    const oldCharacter = charactersRepo.getCharacter(ids.characterId)!
-    expect(oldCharacter.publicationId).toBe(expected.publicationV1)
+    // But out of the current canon.
+    const live = charactersRepo.listCharacters(ids.worldId).filter((c) => !c.retiredAt)
+    for (const retired of expected.retiredCharacterIds) {
+      expect(live.some((c) => c.hubId === retired)).toBe(false)
+    }
   })
 
   it('reports added, updated and retired characters in the preview', async () => {
@@ -147,28 +186,13 @@ describe('updates and pinning', () => {
     expect(preview.publicationId).toBe(expected.publicationV2)
   })
 
-  it('migrates a scene to the current canon only when every character exists there', async () => {
+  it('counts the conversations that will carry on', async () => {
     const ids = await installV1WithPrivateData()
-    await activateZip('valid-v2.zip')
-
-    // The pinned scene includes a character retired in v2 → migration refuses.
-    expect(() => hub.migrateScene(ids.sceneId)).toThrow(PackageError)
-    expect(scenesRepo.getScene(ids.sceneId)!.publicationId).toBe(expected.publicationV1)
-
-    // A scene with only surviving characters migrates cleanly.
-    const survivingOld = charactersRepo
-      .listCharacters(ids.worldId)
-      .filter((c) => c.hubId && !expected.retiredCharacterIds.includes(c.hubId))
-    const cleanSceneId = scenesRepo.saveScene({
-      worldId: ids.worldId,
-      characterIds: survivingOld.map((c) => c.id)
-    })
-    getDb().prepare('UPDATE scenes SET publication_id = ? WHERE id = ?').run(expected.publicationV1, cleanSceneId)
-    hub.migrateScene(cleanSceneId)
-    const migrated = scenesRepo.getScene(cleanSceneId)!
-    expect(migrated.publicationId).toBe(expected.publicationV2)
-    const migratedWorld = worldsRepo.getWorld(migrated.worldId)!
-    expect(migratedWorld.publicationId).toBe(expected.publicationV2)
+    const staged = await hub.stageZip(join(FIXTURES, 'valid-v2.zip'))
+    const preview = hub.preview(staged)
+    hub.cleanupStaged(staged)
+    expect(preview.continuingScenes).toBe(1)
+    expect(ids.sceneId).toBeGreaterThan(0)
   })
 
   it('rolls back to the previous publication from the local cache', async () => {
@@ -179,11 +203,52 @@ describe('updates and pinning', () => {
     expect(settingsRepo.activePublicationId()).toBe(expected.publicationV1)
   })
 
-  it('re-activating the same publication is idempotent', async () => {
+  it('re-activating, and rolling back, leaves one row per entity', async () => {
     await activateZip('valid-v1.zip')
-    const before = worldsRepo.listWorlds().length
+    const world = worldsRepo.listWorlds()[0]!
+    const cast = charactersRepo.listCharacters(world.id)
+    scenesRepo.saveScene({ worldId: world.id, title: 'In progress', characterIds: [cast[0]!.id] })
+
     await activateZip('valid-v1.zip')
-    expect(worldsRepo.listWorlds()).toHaveLength(before)
+    expect(worldsRepo.listWorlds()).toHaveLength(1)
+    expect(charactersRepo.listCharacters(world.id)).toHaveLength(cast.length)
+
+    await activateZip('valid-v2.zip')
+    hub.rollback()
+    expect(worldsRepo.listWorlds()).toHaveLength(1)
+    expect(worldsRepo.listWorlds()[0]!.id).toBe(world.id)
+    expect(charactersRepo.listCharacters(world.id).filter((c) => !c.retiredAt)).toHaveLength(
+      cast.length
+    )
+  })
+})
+
+describe('imported art', () => {
+  const mediaPath = (relative: string): string =>
+    join(process.env['CHATBOT_DATA_DIR']!, 'media', relative)
+
+  it('keeps every file the database still points at, and drops the rest', async () => {
+    await activateZip('valid-v1.zip')
+    const world = worldsRepo.listWorlds()[0]!
+    charactersRepo.listCharacters(world.id).forEach((c) => {
+      scenesRepo.saveScene({ worldId: world.id, title: c.name, characterIds: [c.id] })
+    })
+
+    // A folder from a publication nothing points at any more.
+    const stray = join(process.env['CHATBOT_DATA_DIR']!, 'media', 'worldhub', 'gone')
+    mkdirSync(stray, { recursive: true })
+
+    await activateZip('valid-v2.zip')
+
+    expect(existsSync(stray)).toBe(false)
+    // Retired characters keep the art they retired with, so their folder stays.
+    for (const character of charactersRepo.listCharacters(world.id)) {
+      if (character.portraitPath) expect(existsSync(mediaPath(character.portraitPath))).toBe(true)
+      if (character.tileImagePath) expect(existsSync(mediaPath(character.tileImagePath))).toBe(true)
+    }
+    if (worldsRepo.getWorld(world.id)!.coverImagePath) {
+      expect(existsSync(mediaPath(worldsRepo.getWorld(world.id)!.coverImagePath))).toBe(true)
+    }
   })
 })
 

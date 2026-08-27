@@ -133,12 +133,18 @@ Application Contract 1). The authoritative contract lives at
   content; linked Hub Markdown becomes lore with derived trigger keywords you
   can tune locally. Personas, scenes, memories, and private notes stay editable
   and local, and are never written back to the Hub.
-- **Pinning** — every conversation is pinned to the publication that was active
-  when it began, so an update never changes character behavior mid-story.
-  Retired characters stay visible in their old conversations but cannot start
-  new ones. Each pinned conversation offers an explicit
-  *Move it to the current canon →* action.
+- **Identity** — a Hub entity has one row here for the life of the app, keyed
+  by the permanent entity UUID the Hub issues. An update writes into the rows it
+  matches rather than replacing them, so a scene under way, the memories its
+  characters have gathered and the world's private notes all carry straight on
+  into the new revision, renames included. Conversations record the publication
+  they began under, but nothing is pinned to it.
+- **Retirement** — a world or character the active publication no longer carries
+  is retired, never removed. It drops out of the pickers and out of the world
+  list, keeps answering for the scenes, memories and notes that already point at
+  it, and comes back the moment a publication carries it again. A retired world
+  stays listed for as long as it holds a scene.
 - **Rollback** — the previous publication is retained and can be reactivated
-  from Settings.
+  from Settings; it updates the same rows, so nothing is duplicated.
 - **Provenance** — installs are copied into the app's data with a receipt per
   publication, so the app works offline from its own cache.

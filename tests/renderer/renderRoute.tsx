@@ -14,11 +14,13 @@ export interface RenderedRoute extends RenderResult {
  * Mounts a screen through the app's real route table and providers, so tests
  * cover routing, data loading and overlays the same way the app does.
  */
-export function renderRoute(initial: string): RenderedRoute {
+export function renderRoute(initial: string, state?: unknown): RenderedRoute {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } }
   })
-  const router = createMemoryRouter(routes, { initialEntries: [initial] })
+  const router = createMemoryRouter(routes, {
+    initialEntries: [state === undefined ? initial : { pathname: initial, state }]
+  })
   const result = render(
     <QueryClientProvider client={client}>
       <SnackProvider>

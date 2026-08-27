@@ -576,37 +576,27 @@ describe('a one-shot generation in flight', () => {
   })
 })
 
-describe('a conversation pinned to older canon', () => {
-  it('offers to move it once the active publication has moved on', async () => {
-    seed()
-    api.store.hub = {
-      hubMode: true,
-      publicationId: 'pub-2',
-      receipt: null,
-      previousPublicationId: 'pub-1',
-      linkedFolder: ''
-    }
-    api.store.scenes[0]!.publicationId = 'pub-1'
+describe('a cast member the Hub has stopped publishing', () => {
+  it('says the scene keeps them', async () => {
+    api = installFakeApi({
+      worlds: [makeWorld({ id: 1 })],
+      characters: [
+        makeCharacter({ id: 10, worldId: 1, name: 'Ayame' }),
+        makeCharacter({ id: 11, worldId: 1, name: 'Kaguya', retiredAt: '2026-08-01T00:00:00.000Z' })
+      ],
+      scenes: [makeScene({ id: 5, worldId: 1, characterIds: [10, 11] })],
+      messages: []
+    })
     renderRoute('/chat/5')
     expect(
-      await screen.findByText('This conversation is pinned to the canon it began with.')
+      await screen.findByText(/Kaguya is no longer in the published canon/)
     ).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: /Move it to the current canon/ }))
-    await waitFor(() => expect(api.callsTo('hub:migrateScene')).toContainEqual([5]))
   })
 
-  it('stays quiet when the conversation is already on the current canon', async () => {
-    seed()
-    api.store.hub = {
-      hubMode: true,
-      publicationId: 'pub-2',
-      receipt: null,
-      previousPublicationId: null,
-      linkedFolder: ''
-    }
-    api.store.scenes[0]!.publicationId = 'pub-2'
+  it('stays quiet when the whole cast is current', async () => {
+    seed({ characterIds: [10, 11] })
     renderRoute('/chat/5')
     await screen.findByPlaceholderText('Say something')
-    expect(screen.queryByText(/pinned to the canon/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/no longer in the published canon/)).not.toBeInTheDocument()
   })
 })

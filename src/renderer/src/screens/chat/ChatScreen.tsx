@@ -43,7 +43,11 @@ function OneShotProgress({
   return (
     <span style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'baseline' }}>
       <PulseDot label={ONE_SHOT_LABEL[kind]} />
-      <TextAction kind="secondary" onClick={onCancel} title="Stop the generation and free the model">
+      <TextAction
+        kind="secondary"
+        onClick={onCancel}
+        title="Stop the generation and free the model"
+      >
         Stop
       </TextAction>
     </span>
@@ -88,10 +92,14 @@ export default function ChatScreen(): React.JSX.Element {
   const closeCast = useCallback(() => setCastOpen(false), [])
 
   // Per-scene display mode with the global setting as fallback.
-  const displayMode = scene?.displayMode ?? (settingsQuery.data?.displayMode === 'vn' ? 'vn' : 'chat')
+  const displayMode =
+    scene?.displayMode ?? (settingsQuery.data?.displayMode === 'vn' ? 'vn' : 'chat')
   const setDisplayMode = useIpcMutation('scenes:setDisplayMode', ['scenes:get'])
 
-  const transcriptRef = useRef<HTMLDivElement>(null)
+  // Held as state, not refs: neither element exists until the scene has loaded,
+  // and the pin has to run when they appear.
+  const [transcript, setTranscript] = useState<HTMLDivElement | null>(null)
+  const [transcriptContent, setTranscriptContent] = useState<HTMLDivElement | null>(null)
 
   function refreshMessages(): void {
     client.invalidateQueries({ queryKey: ['messages:list', sceneId] })
@@ -124,7 +132,8 @@ export default function ChatScreen(): React.JSX.Element {
     try {
       return await run()
     } catch (err) {
-      if (!(err instanceof ApiError) || err.code !== 'cancelled') snack((err as Error).message, true)
+      if (!(err instanceof ApiError) || err.code !== 'cancelled')
+        snack((err as Error).message, true)
       return null
     } finally {
       oneShotRef.current = null
@@ -165,13 +174,9 @@ export default function ChatScreen(): React.JSX.Element {
     displayCharacter?.portraitPath ||
     ''
 
-  // Entering a scene lands on its last line; see useStickToBottom for why the
-  // transcript element alone is not enough.
-  useStickToBottom(
-    transcriptRef,
-    [messages.length, stream.streamText, displayMode],
-    messagesQuery.isSuccess
-  )
+  // Entering a scene lands on its last line, and stays there while the reader
+  // is reading the newest one.
+  useStickToBottom(transcript, transcriptContent, messagesQuery.isSuccess)
 
   function speakerFor(message: Message): string {
     if (message.role === 'user') return persona?.name ?? 'You'
@@ -214,7 +219,13 @@ export default function ChatScreen(): React.JSX.Element {
     })
   }
 
-  function MessageEditor({ message, close }: { message: Message; close: () => void }): React.JSX.Element {
+  function MessageEditor({
+    message,
+    close
+  }: {
+    message: Message
+    close: () => void
+  }): React.JSX.Element {
     const [text, setText] = useState(message.content)
     const continuable = message.role === 'character' || message.role === 'narrator'
     return (
@@ -236,7 +247,12 @@ export default function ChatScreen(): React.JSX.Element {
               onClick={async () => {
                 await call('messages:update', message.id, text)
                 close()
-                await stream.start({ kind: 'continuation', sceneId, messageId: message.id, partial: text })
+                await stream.start({
+                  kind: 'continuation',
+                  sceneId,
+                  messageId: message.id,
+                  partial: text
+                })
               }}
               title="The AI finishes the reply from where the kept text stops"
             >
@@ -272,11 +288,21 @@ export default function ChatScreen(): React.JSX.Element {
     overlay.open({
       eyebrow: 'Remember',
       title: 'What should remain true?',
-      render: (close) => <RememberEditor initial={message.content} characterId={character.id} close={close} />
+      render: (close) => (
+        <RememberEditor initial={message.content} characterId={character.id} close={close} />
+      )
     })
   }
 
-  function RememberEditor({ initial, characterId, close }: { initial: string; characterId: number; close: () => void }): React.JSX.Element {
+  function RememberEditor({
+    initial,
+    characterId,
+    close
+  }: {
+    initial: string
+    characterId: number
+    close: () => void
+  }): React.JSX.Element {
     const [text, setText] = useState(initial)
     return (
       <div className="block">
@@ -289,7 +315,12 @@ export default function ChatScreen(): React.JSX.Element {
                 snack('A memory needs something true to carry.', true)
                 return
               }
-              await call('memories:save', { characterId, type: 'canon', content: text.trim(), sourceSceneId: sceneId })
+              await call('memories:save', {
+                characterId,
+                type: 'canon',
+                content: text.trim(),
+                sourceSceneId: sceneId
+              })
               snack('Remembered.')
               close()
             }}
@@ -328,7 +359,9 @@ export default function ChatScreen(): React.JSX.Element {
       title: 'What this scene now remembers.',
       render: (close) => (
         <div className="block">
-          <p className="body-text" style={{ whiteSpace: 'pre-wrap' }}>{summary}</p>
+          <p className="body-text" style={{ whiteSpace: 'pre-wrap' }}>
+            {summary}
+          </p>
           <div className="overlay-actions">
             <TextAction
               onClick={() => {
@@ -390,7 +423,13 @@ export default function ChatScreen(): React.JSX.Element {
         <p className="body-text">
           They join from the next reply on, and the model is given their full profile.
         </p>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 'var(--space-4)' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+            gap: 'var(--space-4)'
+          }}
+        >
           {others.map((c) => {
             const chosen = picked.has(c.id)
             const art = c.tileImagePath || c.portraitPath
@@ -410,9 +449,16 @@ export default function ChatScreen(): React.JSX.Element {
                 }
               >
                 {art ? (
-                  <Art path={art} treatment="alpha" ghost={!chosen} style={{ width: '100%', aspectRatio: '16/9', objectFit: 'contain' }} />
+                  <Art
+                    path={art}
+                    treatment="alpha"
+                    ghost={!chosen}
+                    style={{ width: '100%', aspectRatio: '16/9', objectFit: 'contain' }}
+                  />
                 ) : null}
-                <span className="row-title" style={{ fontSize: 'var(--size-title)' }}>{c.name}</span>
+                <span className="row-title" style={{ fontSize: 'var(--size-title)' }}>
+                  {c.name}
+                </span>
                 <span className="caption" style={chosen ? { color: 'var(--accent)' } : undefined}>
                   {chosen ? 'joins the scene' : 'not invited'}
                 </span>
@@ -450,7 +496,121 @@ export default function ChatScreen(): React.JSX.Element {
   async function answerNow(): Promise<void> {
     if (!canGenerate) return
     setCastOpen(false)
-    await stream.start({ kind: 'reply', sceneId, responderId: responder?.id, respondToLatest: true })
+    await stream.start({
+      kind: 'reply',
+      sceneId,
+      responderId: responder?.id,
+      respondToLatest: true
+    })
+  }
+
+  /**
+   * Everything a scene can be done to, one step away. These are occasional —
+   * read the whole backlog, look at the prompt, bring someone in — and the
+   * screen is for the conversation, so they are named here rather than kept on
+   * a permanent toolbar the transcript would have to pay for.
+   */
+  function openSceneActions(): void {
+    overlay.open({
+      eyebrow: 'This scene',
+      title: 'What would you like to do?',
+      render: (close) => (
+        <div className="block" style={{ gap: 'var(--space-4)' }}>
+          <TextAction
+            kind="secondary"
+            disabled={!canGenerate}
+            sub="The AI proposes canon facts from this scene for your review."
+            onClick={() => {
+              close()
+              suggestMemories()
+            }}
+          >
+            Suggest memories →
+          </TextAction>
+          <TextAction
+            kind="secondary"
+            sub="Bring another character of this world into the scene."
+            onClick={() => {
+              close()
+              inviteCharacters()
+            }}
+          >
+            Invite character →
+          </TextAction>
+          <TextAction
+            kind="secondary"
+            sub="How this scene is shown — only this scene."
+            onClick={() => {
+              close()
+              setDisplayMode.mutate([sceneId, displayMode === 'vn' ? 'chat' : 'vn'])
+            }}
+          >
+            {displayMode === 'vn' ? 'Rolling chat →' : 'Visual novel →'}
+          </TextAction>
+          {displayMode === 'vn' ? (
+            <TextAction
+              kind="secondary"
+              sub="The visual novel stage shows the latest line; this is all of them."
+              onClick={() => {
+                close()
+                openBacklog()
+              }}
+            >
+              Backlog →
+            </TextAction>
+          ) : null}
+          <TextAction
+            kind="secondary"
+            sub="What the model is actually sent."
+            onClick={() => {
+              close()
+              overlay.open({
+                eyebrow: 'Prompt debug',
+                title: 'What the model is actually sent.',
+                render: () => <PromptDebugBody sceneId={sceneId} />
+              })
+            }}
+          >
+            Prompt debug →
+          </TextAction>
+          <TextAction
+            kind="secondary"
+            sub="Writes the whole transcript to a file."
+            onClick={async () => {
+              close()
+              try {
+                const path = await call('chat:export', sceneId)
+                snack(`Transcript saved to ${path}`)
+              } catch (err) {
+                snack((err as Error).message, true)
+              }
+            }}
+          >
+            Export →
+          </TextAction>
+        </div>
+      )
+    })
+  }
+
+  function openBacklog(): void {
+    overlay.open({
+      eyebrow: 'Backlog',
+      title: 'Everything said so far.',
+      render: () => (
+        <div className="block" style={{ gap: 'var(--space-4)' }}>
+          {messages.map((m) => (
+            <div key={m.id} className="block" style={{ gap: 4 }}>
+              <Eyebrow>{speakerFor(m)}</Eyebrow>
+              <div className="body-text chat-prose">
+                <Markdown>{m.content}</Markdown>
+              </div>
+              <Rule end={48 + ((m.id * 13) % 36)} />
+            </div>
+          ))}
+        </div>
+      )
+    })
   }
 
   if (!scene) return <Screen back={{ label: 'Worlds', to: '/' }}>{null}</Screen>
@@ -462,34 +622,44 @@ export default function ChatScreen(): React.JSX.Element {
 
   return (
     <Screen
+      layout="conversation"
       back={{ label: world?.name ?? 'World', to: `/world/${scene.worldId}/sessions` }}
-      rightActions={multi ? (
-        <TextAction
-          kind="secondary"
-          onClick={() => setCastOpen((open) => !open)}
-          title="Who answers next, and who can answer now"
-        >
-          Next: {responder?.name ?? 'nobody'}
-        </TextAction>
-      ) : null}
-      rail={multi && castOpen ? (
-        <ResponderDrawer
-          cast={cast}
-          responder={responder}
-          onChoose={setResponderId}
-          onAnswerNow={answerNow}
-          canGenerate={canGenerate}
-          repliesTo={lastCharacterMessage ? speakerFor(lastCharacterMessage) : null}
-          onClose={closeCast}
-        />
-      ) : null}
+      rightActions={
+        multi ? (
+          <TextAction
+            kind="secondary"
+            onClick={() => setCastOpen((open) => !open)}
+            title="Who answers next, and who can answer now"
+          >
+            Next: {responder?.name ?? 'nobody'}
+          </TextAction>
+        ) : null
+      }
+      rail={
+        multi && castOpen ? (
+          <ResponderDrawer
+            cast={cast}
+            responder={responder}
+            onChoose={setResponderId}
+            onAnswerNow={answerNow}
+            canGenerate={canGenerate}
+            repliesTo={lastCharacterMessage ? speakerFor(lastCharacterMessage) : null}
+            onClose={closeCast}
+          />
+        ) : null
+      }
       backdrop={
         backdropArt ? (
           <>
             <Art
               path={backdropArt}
               treatment="masked"
-              style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: displayMode === 'vn' ? 0.3 : 0.18 }}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                opacity: displayMode === 'vn' ? 0.3 : 0.18
+              }}
             />
             <div className="scrim-top" />
           </>
@@ -505,142 +675,101 @@ export default function ChatScreen(): React.JSX.Element {
         </h1>
         {retiredCast.length ? (
           <span className="caption">
-            {retiredCast.map((c) => c.name).join(' and ')}{' '}
-            {retiredCast.length === 1 ? 'is' : 'are'} no longer in the published canon — this scene
-            keeps {retiredCast.length === 1 ? 'them' : 'them all'}.
+            {retiredCast.map((c) => c.name).join(' and ')} {retiredCast.length === 1 ? 'is' : 'are'}{' '}
+            no longer in the published canon — this scene keeps{' '}
+            {retiredCast.length === 1 ? 'them' : 'them all'}.
           </span>
         ) : null}
       </div>
 
-      <div style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div
+        style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'center', flexWrap: 'wrap' }}
+      >
         <span className="caption">
-          <span className="display" style={{ fontSize: '1.3rem' }}>{sent}</span> of {messages.length}{' '}
-          messages are being sent
+          <span className="display" style={{ fontSize: '1.3rem' }}>
+            {sent}
+          </span>{' '}
+          of {messages.length} messages are being sent
         </span>
         <FadingBar fill={messages.length ? sent / Math.max(messages.length, 1) : 0} width={220} />
+        {/* Summarizing is what the counter beside it is asking for, so it stays
+            in the open. Everything else a scene can be done to is occasional,
+            and occasional actions belong one step away rather than in a toolbar
+            that costs the conversation a third of the window. */}
         <TextAction kind="secondary" onClick={summarizeScene} disabled={!canGenerate}>
           Summarize
         </TextAction>
-        <TextAction
-          kind="secondary"
-          onClick={suggestMemories}
-          disabled={!canGenerate}
-          title="The AI proposes canon facts from this scene for your review"
-        >
-          Suggest memories
+        <TextAction kind="secondary" onClick={openSceneActions}>
+          Scene actions →
         </TextAction>
         {oneShot && oneShot !== 'impersonate' ? (
           <OneShotProgress kind={oneShot} onCancel={cancelOneShot} />
         ) : null}
-        <TextAction
-          kind="secondary"
-          onClick={() => setDisplayMode.mutate([sceneId, displayMode === 'vn' ? 'chat' : 'vn'])}
-          title="How this scene is shown — only this scene"
-        >
-          {displayMode === 'vn' ? 'Rolling chat' : 'Visual novel'}
-        </TextAction>
-        {displayMode === 'vn' ? (
-          <TextAction
-            kind="secondary"
-            onClick={() =>
-              overlay.open({
-                eyebrow: 'Backlog',
-                title: 'Everything said so far.',
-                render: () => (
-                  <div className="block" style={{ gap: 'var(--space-4)' }}>
-                    {messages.map((m) => (
-                      <div key={m.id} className="block" style={{ gap: 4 }}>
-                        <Eyebrow>{speakerFor(m)}</Eyebrow>
-                        <div className="body-text chat-prose">
-                          <Markdown>{m.content}</Markdown>
-                        </div>
-                        <Rule end={48 + ((m.id * 13) % 36)} />
-                      </div>
-                    ))}
-                  </div>
-                )
-              })
-            }
-          >
-            Backlog
-          </TextAction>
-        ) : null}
-        <TextAction
-          kind="secondary"
-          onClick={inviteCharacters}
-          title="Bring another character of this world into the scene"
-        >
-          Invite character
-        </TextAction>
-        <TextAction
-          kind="secondary"
-          onClick={() =>
-            overlay.open({
-              eyebrow: 'Prompt debug',
-              title: 'What the model is actually sent.',
-              render: () => <PromptDebugBody sceneId={sceneId} />
-            })
-          }
-        >
-          Prompt debug
-        </TextAction>
-        <TextAction kind="secondary" onClick={async () => {
-          try {
-            const path = await call('chat:export', sceneId)
-            snack(`Transcript saved to ${path}`)
-          } catch (err) {
-            snack((err as Error).message, true)
-          }
-        }}>
-          Export
-        </TextAction>
       </div>
 
-      <div style={{ flex: 1, display: 'flex', gap: 'var(--space-5)', minHeight: 200 }}>
+      <div className="conversation-stage">
         {stagePortrait ? (
-          <div style={{ flex: '0 0 240px', alignSelf: 'flex-end', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          // Stretched rather than bottom-aligned so the portrait has a height
+          // to be a percentage of: in a short window it shrinks with the row
+          // instead of pushing the transcript out of the frame.
+          <div
+            style={{
+              flex: '0 0 240px',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'flex-end',
+              gap: 6
+            }}
+          >
             <Art
               path={stagePortrait}
               treatment="alpha"
-              style={{ width: '100%', maxHeight: displayMode === 'vn' ? 520 : 380, objectPosition: 'bottom' }}
+              style={{
+                width: '100%',
+                maxHeight: displayMode === 'vn' ? 'min(520px, 100%)' : 'min(380px, 100%)',
+                objectPosition: 'bottom'
+              }}
             />
             {stageEmotion ? <span className="caption">[{stageEmotion}]</span> : null}
           </div>
         ) : null}
 
         {displayMode === 'chat' ? (
-          <div
-            ref={transcriptRef}
-            style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', paddingRight: 8 }}
-          >
-            {messages.map((message) =>
-              message.role === 'system-note' ? (
-                <p key={message.id} className="caption" style={{ textAlign: 'center' }}>
-                  {message.content}
-                </p>
-              ) : (
-                <Turn
-                  key={message.id}
-                  message={message}
-                  speaker={speakerFor(message)}
-                  isUser={message.role === 'user'}
-                  onEdit={() => editMessage(message)}
-                  onDelete={() => deleteMessage(message)}
-                  onRemember={message.role === 'character' ? () => rememberMessage(message) : undefined}
-                />
-              )
-            )}
-            {stream.streamText !== null ? (
-              <div className="block" style={{ gap: 6 }}>
-                <span style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
-                  <span className="display" style={{ fontSize: 'var(--size-display-s)' }}>{liveSpeaker}</span>
-                  <PulseDot label="answering" />
-                </span>
-                <div className="body-text chat-prose">
-                  <Markdown>{(streamDisplay ?? '') + ' ▌'}</Markdown>
+          <div ref={setTranscript} className="transcript">
+            <div ref={setTranscriptContent} className="transcript-content">
+              {messages.map((message) =>
+                message.role === 'system-note' ? (
+                  <p key={message.id} className="caption" style={{ textAlign: 'center' }}>
+                    {message.content}
+                  </p>
+                ) : (
+                  <Turn
+                    key={message.id}
+                    message={message}
+                    speaker={speakerFor(message)}
+                    isUser={message.role === 'user'}
+                    onEdit={() => editMessage(message)}
+                    onDelete={() => deleteMessage(message)}
+                    onRemember={
+                      message.role === 'character' ? () => rememberMessage(message) : undefined
+                    }
+                  />
+                )
+              )}
+              {stream.streamText !== null ? (
+                <div className="block" style={{ gap: 6 }}>
+                  <span style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
+                    <span className="display" style={{ fontSize: 'var(--size-display-s)' }}>
+                      {liveSpeaker}
+                    </span>
+                    <PulseDot label="answering" />
+                  </span>
+                  <div className="body-text chat-prose">
+                    <Markdown>{(streamDisplay ?? '') + ' ▌'}</Markdown>
+                  </div>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </div>
         ) : (
           <VisualNovelStage
@@ -719,9 +848,7 @@ function ResponderDrawer({
         <h2 className="display" style={{ fontSize: 'var(--size-display-m)' }}>
           {responder ? `${responder.name} will answer next.` : 'Nobody is chosen yet.'}
         </h2>
-        <p className="caption">
-          Choose who takes the next normal turn after you send a message.
-        </p>
+        <p className="caption">Choose who takes the next normal turn after you send a message.</p>
       </div>
 
       <div className="rail-scroll">
@@ -744,7 +871,11 @@ function ResponderDrawer({
                     style={{ flex: '0 0 78px', width: 78, aspectRatio: '4/3' }}
                   />
                 ) : (
-                  <ArtPlaceholder label="NO PORTRAIT" aspect="4/3" style={{ flex: '0 0 78px', width: 78 }} />
+                  <ArtPlaceholder
+                    label="NO PORTRAIT"
+                    aspect="4/3"
+                    style={{ flex: '0 0 78px', width: 78 }}
+                  />
                 )}
                 <span className="block" style={{ gap: 2 }}>
                   <span className="row-title" style={{ fontSize: 'var(--size-display-s)' }}>
@@ -817,11 +948,16 @@ function VisualNovelStage({
       <Rule end={70} />
       {speaker ? (
         <span style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
-          <span className="display" style={{ fontSize: 'calc(2.2rem * var(--text-scale))' }}>{speaker}</span>
+          <span className="display" style={{ fontSize: 'calc(2.2rem * var(--text-scale))' }}>
+            {speaker}
+          </span>
           {streaming ? <PulseDot label="answering" /> : null}
         </span>
       ) : null}
-      <div className="body-text chat-prose" style={{ fontSize: '1.18rem', lineHeight: 1.65, maxWidth: '46em' }}>
+      <div
+        className="body-text chat-prose vn-reply"
+        style={{ fontSize: '1.18rem', lineHeight: 1.65, maxWidth: '46em' }}
+      >
         <Markdown>{text || 'The scene is waiting for its first line.'}</Markdown>
       </div>
     </div>
@@ -853,15 +989,43 @@ function Turn({
       {isUser ? <VRule /> : null}
       <div className="block" style={{ gap: 4, flex: 1 }}>
         <span style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
-          <span className="display" style={{ fontSize: isUser ? '1.05rem' : 'var(--size-display-s)', color: isUser ? 'var(--muted)' : 'var(--text-1)' }}>
+          <span
+            className="display"
+            style={{
+              fontSize: isUser ? '1.05rem' : 'var(--size-display-s)',
+              color: isUser ? 'var(--muted)' : 'var(--text-1)'
+            }}
+          >
             {speaker}
           </span>
-          <span style={{ display: 'flex', gap: 12, opacity: hover ? 1 : 0, transition: 'opacity 160ms' }}>
-            <button type="button" className="text-action text-action--secondary" onClick={onEdit}>Edit</button>
+          <span
+            style={{
+              display: 'flex',
+              gap: 12,
+              opacity: hover ? 1 : 0,
+              transition: 'opacity 160ms'
+            }}
+          >
+            <button type="button" className="text-action text-action--secondary" onClick={onEdit}>
+              Edit
+            </button>
             {onRemember ? (
-              <button type="button" className="text-action text-action--secondary" onClick={onRemember} title="Save as a canon memory">Remember</button>
+              <button
+                type="button"
+                className="text-action text-action--secondary"
+                onClick={onRemember}
+                title="Save as a canon memory"
+              >
+                Remember
+              </button>
             ) : null}
-            <button type="button" className="text-action text-action--destructive" onClick={onDelete}>Delete</button>
+            <button
+              type="button"
+              className="text-action text-action--destructive"
+              onClick={onDelete}
+            >
+              Delete
+            </button>
           </span>
         </span>
         <div className="body-text chat-prose">
@@ -913,7 +1077,9 @@ function Composer({
           }}
         />
       </div>
-      <div style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'baseline', flexWrap: 'wrap' }}>
+      <div
+        style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'baseline', flexWrap: 'wrap' }}
+      >
         {status ? (
           <span style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'baseline' }}>
             <PulseDot label={status} />

@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { OverlayProvider } from './components/overlay'
 import { SnackProvider } from './components/snack'
 import { call } from './lib/api'
+import { installDragGuard } from './lib/dragGuard'
 import HomeScreen from './screens/HomeScreen'
 import WorldScreen from './screens/world/WorldScreen'
 import CharacterEditorScreen from './screens/character/CharacterEditorScreen'
@@ -57,6 +58,7 @@ export function applyAccessibility(reduceMotion: boolean, textScale: number): vo
 
 export default function App(): React.JSX.Element {
   useAccessibilitySettings()
+  useEffect(installDragGuard, [])
   return (
     <QueryClientProvider client={queryClient}>
       <SnackProvider>

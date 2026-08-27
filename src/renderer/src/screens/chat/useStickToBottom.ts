@@ -1,62 +1,70 @@
-import { useLayoutEffect, useRef, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 
 /**
  * Keeps a transcript pinned to its newest line.
  *
- * The transcript is not its own scroll region — the screen is `min-height:
- * 100vh` and grows, so it is the document that scrolls. Both are handled here:
- * whichever of the two actually overflows gets moved.
+ * A conversation screen fits the window, so the transcript is its own scroll
+ * region and the document never moves; this only ever scrolls the element it is
+ * given. When there is no element — the scene is still loading, or the visual
+ * novel stage is showing the latest line and nothing else — there is nothing to
+ * do.
  *
- * Entering a scene always lands on the last message. After that the view only
- * follows when the reader was already at the bottom, so a streaming reply never
- * yanks them out of something they were reading further up.
+ * What is watched is the content, not the scroll region. A scroll container's
+ * own box never changes as things arrive inside it, so watching the container
+ * means guessing at when it is ready; watching the content means the first real
+ * layout, the stylesheet landing, a portrait resolving late and a reply
+ * streaming in are all the same event, and all of them simply pin again.
+ *
+ * The reader is in charge after that. Scrolling up stops the following, and
+ * coming back within a line or two of the bottom resumes it, so a streaming
+ * reply never yanks anyone out of something they were reading further up.
  */
 
 /** How far from the bottom still counts as "reading the newest line". */
 const NEAR_BOTTOM = 120
 
-/** The element that scrolls the page; documentElement in standards mode. */
-function pageElement(): HTMLElement | null {
-  return (document.scrollingElement as HTMLElement | null) ?? document.documentElement
-}
-
-function scrollable(element: HTMLElement | null): boolean {
-  return !!element && element.scrollHeight - element.clientHeight > 1
-}
-
 function distanceFromBottom(element: HTMLElement): number {
-  return element.scrollHeight - element.clientHeight - element.scrollTop
+  return element.scrollHeight - element.scrollTop - element.clientHeight
 }
 
 export function useStickToBottom(
-  ref: RefObject<HTMLElement | null>,
-  deps: unknown[],
+  /** The scroll region. */
+  scroller: HTMLElement | null,
+  /** The single child whose height is the transcript's height. */
+  content: HTMLElement | null,
   /** False while the scene is still loading, so entry is not counted early. */
   ready = true
 ): void {
-  const enteredRef = useRef(false)
+  const followingRef = useRef(true)
+
+  // A new transcript is owed the newest line: coming back from the visual
+  // novel, or re-entering the scene, starts at the bottom again.
+  useLayoutEffect(() => {
+    followingRef.current = true
+  }, [scroller])
+
+  // Whether to keep following is the reader's to decide, and they say it by
+  // scrolling. Distance from the bottom is the question, not a moved scrollTop:
+  // the browser shifts scrollTop by itself whenever content above reflows.
+  useEffect(() => {
+    if (!scroller) return
+    const onScroll = (): void => {
+      followingRef.current = distanceFromBottom(scroller) <= NEAR_BOTTOM
+    }
+    scroller.addEventListener('scroll', onScroll, { passive: true })
+    return () => scroller.removeEventListener('scroll', onScroll)
+  }, [scroller])
 
   useLayoutEffect(() => {
-    if (!ready) return
-    const entering = !enteredRef.current
-    const element = ref.current
-    const page = pageElement()
-
-    const target = scrollable(element) ? element : scrollable(page) ? page : null
-    if (!entering && target && distanceFromBottom(target) > NEAR_BOTTOM) return
-
-    const toBottom = (): void => {
-      const el = ref.current
-      if (scrollable(el)) el!.scrollTop = el!.scrollHeight
-      const doc = pageElement()
-      if (scrollable(doc)) doc!.scrollTop = doc!.scrollHeight
+    if (!ready || !scroller || !content) return
+    const pin = (): void => {
+      scroller.scrollTop = scroller.scrollHeight
     }
-
-    toBottom()
-    // Markdown and portraits settle a frame later and change the height; a
-    // single follow-up catches that without fighting the user's own scrolling.
-    const frame = requestAnimationFrame(toBottom)
-    enteredRef.current = true
-    return () => cancelAnimationFrame(frame)
-  }, [ready, ...deps])
+    pin()
+    const observer = new ResizeObserver(() => {
+      if (followingRef.current) pin()
+    })
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [ready, scroller, content])
 }

@@ -110,6 +110,15 @@ function createWindow(): void {
     })
   }
 
+  // Every screen is a hash route inside the one page, so the window has no
+  // business navigating anywhere. Without this, a file dropped on the window —
+  // or a link that escapes the handler below — replaces the whole app with it,
+  // and the only way back is to restart.
+  win.webContents.on('will-navigate', (event, url) => {
+    const document = (address: string): string => address.split('#')[0]!
+    if (document(url) !== document(win.webContents.getURL())) event.preventDefault()
+  })
+
   // External links open in the system browser, never inside the app window.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) {

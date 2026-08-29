@@ -1,0 +1,15 @@
+{
+  "kitVersion": 1,
+  "protocolVersion": 2,
+  "vocabularyVersion": 1,
+  "files": {
+    "CONSUMER_GUIDE.md": "7eab16e83f3aa293c6e28d8b38c9a57de5bee002f4900ab9cefe347c72fac30c",
+    "js/package-reader.d.mts": "f54531f17c4723a79b95610a3cc1e9f4b249f11e4865ca134243d36364003d20",
+    "js/package-reader.mjs": "fb9187c4810be4688e9ebdea9bc73f95d3914555b8e467503e1fb0571ccc0809",
+    "js/verify.mjs": "ab70082e23893bcd5a8d6782e251c7a1a1889756f6613f11c8eab43dd05c6994",
+    "js/zip-reader.d.mts": "8da0d3833b7fb3590eb95b1d382e498bd0afe4cf9ccd1b8149ba16f39634af4d",
+    "js/zip-reader.mjs": "4d402232055f4cd1ea6e30a216e97e0daf17ee19de116ab02dc01fc63a0acff2",
+    "kit.json": "f2efaaeed360f2ec813498def7d6fc3d77c71c15d7cda481165641a3e1da4026",
+    "vocabulary.json": "437406200546d1f3b18a513c2c7b6b889be3fadb0661dd17709fdeac60162263"
+  }
+}

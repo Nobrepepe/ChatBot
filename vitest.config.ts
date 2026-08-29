@@ -5,7 +5,8 @@ import { resolve } from 'node:path'
 const aliases = {
   '@shared': resolve(__dirname, 'src/shared'),
   '@main': resolve(__dirname, 'src/main'),
-  '@renderer': resolve(__dirname, 'src/renderer/src')
+  '@renderer': resolve(__dirname, 'src/renderer/src'),
+  '@worldhub-kit': resolve(__dirname, 'vendor/worldhub-kit')
 }
 
 export default defineConfig({

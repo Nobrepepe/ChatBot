@@ -1,41 +1,46 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { assetFile, type AssetIndexEntry, type PackageInfo } from '@main/worldhub/packageReader'
+import { loadPackage, type PackageInfo } from '@worldhub-kit/js/package-reader.mjs'
+import { extractZipSafely } from '@worldhub-kit/js/zip-reader.mjs'
+import { APP_TYPE } from '@main/worldhub/consumerService'
 
 /**
- * The contract renamed its recipes (landscape_16x9 -> tile_16x9,
- * portrait_9x16 -> portrait_3x4, character tiles from square -> tile_16x9).
- * Publications packaged under the older contract stay readable, because
- * rollback and pinned conversations re-import them from the local cache.
+ * Art is resolved through the contract embedded in each package, never
+ * through recipe names written here. World Hub renames recipes — it has
+ * already done so once, retiring landscape_16x9, portrait_9x16 and the
+ * square character tile — and this app should need no edit when it happens
+ * again.
  */
 
-const contract = JSON.parse(
-  readFileSync(join(__dirname, '..', '..', 'worldhub', 'application-contract.json'), 'utf8')
-) as {
+const CONTRACT_PATH = join(__dirname, '..', '..', 'worldhub', 'application-contract.json')
+const contract = JSON.parse(readFileSync(CONTRACT_PATH, 'utf8')) as {
   requiredRecipes: string[]
+  supportedProtocolVersions: number[]
+  contractFormatVersion: number
   entitySelections: { id: string; assetSets: { id: string; roles: string[]; recipes: string[] }[] }[]
 }
 
-function pkg(entries: Partial<AssetIndexEntry>[]): PackageInfo {
-  return {
-    assetIndex: entries.map((e, i) => ({
-      assetId: 'a1',
-      versionId: `v${i}`,
-      path: `assets/files/a1/${e.recipeId}.webp`,
-      recipeId: 'unknown',
-      ...e
-    })) as AssetIndexEntry[]
-  } as PackageInfo
-}
+let dir: string
+let pkg: PackageInfo
 
-const WIDE = ['tile_16x9', 'landscape_16x9']
-const PORTRAIT = ['portrait_3x4', 'portrait_9x16']
-const TILE = ['tile_16x9', 'square', 'thumbnail_square']
+beforeAll(() => {
+  dir = mkdtempSync(join(tmpdir(), 'recipes-'))
+  extractZipSafely(join(__dirname, '..', 'fixtures', 'worldhub', 'valid-v1.zip'), dir)
+  pkg = loadPackage(dir, APP_TYPE)
+})
+afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 describe('the published contract', () => {
   it('requires only the current recipe names', () => {
     expect(contract.requiredRecipes).toEqual(['tile_16x9', 'portrait_3x4'])
+  })
+
+  it('declares it can read the protocol World Hub publishes', () => {
+    expect(contract.contractFormatVersion).toBe(1)
+    expect(contract.supportedProtocolVersions).toContain(2)
   })
 
   it('uses the renamed character roles and recipes', () => {
@@ -48,37 +53,39 @@ describe('the published contract', () => {
     expect(sprites.recipes).toEqual(['portrait_3x4'])
   })
 
-  it('has no landscape_16x9 left anywhere', () => {
-    const raw = readFileSync(join(__dirname, '..', '..', 'worldhub', 'application-contract.json'), 'utf8')
-    expect(raw).not.toContain('landscape_16x9')
-    expect(raw).not.toContain('portrait_9x16')
-    expect(raw).not.toContain('character.identity_tile')
-    expect(raw).not.toContain('character.expression')
+  it('has no retired vocabulary left anywhere', () => {
+    const raw = readFileSync(CONTRACT_PATH, 'utf8')
+    for (const retired of ['landscape_16x9', 'portrait_9x16', 'card_3x4', 'character.identity_tile', 'character.expression']) {
+      expect(raw).not.toContain(retired)
+    }
   })
 })
 
-describe('recipe resolution', () => {
-  it('prefers the current recipe when a package offers both', () => {
-    const both = pkg([{ recipeId: 'landscape_16x9' }, { recipeId: 'tile_16x9' }])
-    expect(assetFile(both, 'a1', WIDE)?.recipeId).toBe('tile_16x9')
-
-    const portraits = pkg([{ recipeId: 'portrait_9x16' }, { recipeId: 'portrait_3x4' }])
-    expect(assetFile(portraits, 'a1', PORTRAIT)?.recipeId).toBe('portrait_3x4')
+describe('resolution goes through the package, not through names in this file', () => {
+  it('reads each set’s recipes out of the package’s own contract', () => {
+    expect(pkg.recipesFor('tile')).toEqual(['tile_16x9'])
+    expect(pkg.recipesFor('sprites')).toEqual(['portrait_3x4'])
+    expect(pkg.recipesFor('cb_world_cover')).toEqual(['tile_16x9'])
   })
 
-  it('still resolves publications packaged under the older contract', () => {
-    expect(assetFile(pkg([{ recipeId: 'landscape_16x9' }]), 'a1', WIDE)?.recipeId).toBe('landscape_16x9')
-    expect(assetFile(pkg([{ recipeId: 'portrait_9x16' }]), 'a1', PORTRAIT)?.recipeId).toBe('portrait_9x16')
-    expect(assetFile(pkg([{ recipeId: 'square' }]), 'a1', TILE)?.recipeId).toBe('square')
+  it('finds a set by what the art is for, so renaming a set strands nothing', () => {
+    expect(pkg.setForRole('character.tile')).toBe('tile')
+    expect(pkg.setForRole('character.portrait')).toBe('sprites')
+    expect(pkg.setForRole('world.background')).toBe('session_background')
+    expect(pkg.setForRole('nothing.here')).toBeNull()
   })
 
-  it('reads character tiles as 16:9 first, falling back to the old square crop', () => {
-    const both = pkg([{ recipeId: 'square' }, { recipeId: 'tile_16x9' }])
-    expect(assetFile(both, 'a1', TILE)?.recipeId).toBe('tile_16x9')
+  it('resolves real art through the recipes the contract asked for', () => {
+    const tileSet = pkg.setForRole('character.tile')!
+    const entry = pkg.assetIndex.find((e) => e['setId'] === tileSet)!
+    const chosen = pkg.assetFile(entry.assetId, pkg.recipesFor(tileSet))
+    expect(chosen?.recipeId).toBe('tile_16x9')
+    expect(chosen?.path).toBeTruthy()
   })
 
   it('falls back to any available rendition rather than losing the art', () => {
-    expect(assetFile(pkg([{ recipeId: 'something_else' }]), 'a1', WIDE)?.recipeId).toBe('something_else')
-    expect(assetFile(pkg([]), 'a1', WIDE)).toBeNull()
+    const entry = pkg.assetIndex[0]!
+    expect(pkg.assetFile(entry.assetId, ['no_such_recipe'])?.assetId).toBe(entry.assetId)
+    expect(pkg.assetFile('no-such-asset', ['tile_16x9'])).toBeNull()
   })
 })

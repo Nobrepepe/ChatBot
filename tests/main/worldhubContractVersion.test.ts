@@ -3,27 +3,29 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { extractZipSafely, loadPackage, PackageError } from '@main/worldhub/packageReader'
+import { loadPackage, PackageError } from '@worldhub-kit/js/package-reader.mjs'
+import { extractZipSafely } from '@worldhub-kit/js/zip-reader.mjs'
 import { APP_TYPE } from '@main/worldhub/consumerService'
 
 /**
- * A package carries two different numbers called "version":
+ * A package carries two numbers that used to be near-homonyms:
  *
- *   manifest.contract.version   the Hub's revision of the contract record,
- *                               bumped every time the author edits it
- *   contract.contractVersion    the contract format version, which is what
- *                               decides whether this app can read the package
+ *   manifest.contract.revision      the Hub's revision of the contract record,
+ *                                   bumped every time the author edits it
+ *   contract.contractFormatVersion  the contract format version, which is what
+ *                                   decides whether this app can read it
  *
- * Only the second one may gate compatibility. Conflating them rejected a
- * perfectly readable publication the moment the contract was edited.
+ * Only the second may gate compatibility. Conflating them rejected a perfectly
+ * readable publication the moment the contract was edited. Both were renamed in
+ * Protocol 2 so the mistake is harder to write; this holds the line.
  */
 
 const FIXTURE = join(__dirname, '..', 'fixtures', 'worldhub', 'valid-v1.zip')
 let dir: string
 
-beforeEach(async () => {
+beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'contract-version-'))
-  await extractZipSafely(FIXTURE, dir)
+  extractZipSafely(FIXTURE, dir)
 })
 
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
@@ -45,32 +47,32 @@ function patchJson(relativePath: string, mutate: (json: any) => void): void {
 describe('contract version handling', () => {
   it('accepts a package whose contract record has been revised by the author', () => {
     patchJson('manifest.json', (m) => {
-      m.contract.version = 2
+      m.contract.revision = 2
     })
     const pkg = loadPackage(dir, APP_TYPE)
-    expect(pkg.manifest['contract']['version']).toBe(2)
-    expect(pkg.contract['contractVersion']).toBe(1)
+    expect(pkg.manifest['contract']['revision']).toBe(2)
+    expect(pkg.contract['contractFormatVersion']).toBe(1)
   })
 
   it('keeps accepting it as the author keeps editing', () => {
     patchJson('manifest.json', (m) => {
-      m.contract.version = 47
+      m.contract.revision = 47
     })
     expect(() => loadPackage(dir, APP_TYPE)).not.toThrow()
   })
 
   it('still refuses a contract written in a newer format', () => {
     patchJson('production/contract.json', (c) => {
-      c.contractVersion = 2
+      c.contractFormatVersion = 2
     })
     expect(() => loadPackage(dir, APP_TYPE)).toThrow(/contract format this app does not support/)
   })
 
   it('still refuses a newer package protocol', () => {
     patchJson('manifest.json', (m) => {
-      m.protocolVersion = 2
+      m.protocolVersion = 99
     })
-    expect(() => loadPackage(dir, APP_TYPE)).toThrow(/newer World Hub protocol/)
+    expect(() => loadPackage(dir, APP_TYPE)).toThrow(/protocol this app does not understand/)
   })
 
   it('still refuses a package built for another app', () => {

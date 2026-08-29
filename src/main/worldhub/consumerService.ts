@@ -20,15 +20,18 @@ import { worldhubContentDir, mediaRoot } from '../paths'
 import { ACTIVE_PUBLICATION_KEY, LINKED_FOLDER_KEY, activePublicationId, getSetting, saveSetting } from '../db/repo/settings'
 import {
   PackageError,
-  assetFile,
-  entitiesById,
-  extractZipSafely,
   loadPackage,
-  packageAbsolute,
   readCurrentPointer,
-  publicationId as pubIdOf,
   type PackageInfo
-} from './packageReader'
+} from '@worldhub-kit/js/package-reader.mjs'
+import { extractZipSafely } from '@worldhub-kit/js/zip-reader.mjs'
+import vocabulary from '@worldhub-kit/vocabulary.json'
+
+/** What this build of the app understands; a newer package is refused at load. */
+const READER_OPTIONS = {
+  supportedVocabularyVersion: vocabulary.vocabularyVersion,
+  renamedFrom: vocabulary.renamedFrom
+}
 
 export const APP_TYPE = 'chat-bot.cast'
 
@@ -112,8 +115,8 @@ export function semanticValidation(pkg: PackageInfo): void {
 export async function stageZip(zipPath: string): Promise<StagedPackage> {
   const staging = mkdtempSync(join(tmpRoot(), 'worldhub-stage-'))
   try {
-    await extractZipSafely(zipPath, staging)
-    const pkg = loadPackage(staging, APP_TYPE)
+    extractZipSafely(zipPath, staging)
+    const pkg = loadPackage(staging, APP_TYPE, READER_OPTIONS)
     semanticValidation(pkg)
     return { package: pkg, stagingDir: staging, sourceType: 'zip', sourcePath: zipPath }
   } catch (err) {
@@ -136,7 +139,7 @@ export function stageLinkedFolder(productionDir?: string): StagedPackage {
   const staging = mkdtempSync(join(tmpRoot(), 'worldhub-stage-'))
   try {
     cpSync(source, staging, { recursive: true })
-    const pkg = loadPackage(staging, APP_TYPE)
+    const pkg = loadPackage(staging, APP_TYPE, READER_OPTIONS)
     semanticValidation(pkg)
     return { package: pkg, stagingDir: staging, sourceType: 'folder', sourcePath: dir }
   } catch (err) {
@@ -179,7 +182,7 @@ export function status(): HubStatus {
 
 export function preview(staged: StagedPackage): UpdatePreview {
   const pkg = staged.package
-  const entities = entitiesById(pkg)
+  const entities = pkg.entitiesById()
   const selections = pkg.content['selections'] ?? {}
   const db = getDb()
 
@@ -203,7 +206,7 @@ export function preview(staged: StagedPackage): UpdatePreview {
     : 0
 
   const result: UpdatePreview = {
-    publicationId: pubIdOf(pkg),
+    publicationId: pkg.publicationId,
     productionName: pkg.manifest['production']['name'],
     productionRevision: pkg.manifest['production']['revision'],
     publishedAt: pkg.manifest['publishedAt'],
@@ -213,7 +216,7 @@ export function preview(staged: StagedPackage): UpdatePreview {
     retiredCharacters: [],
     loreDocuments: pkg.documents.length,
     continuingScenes,
-    alreadyActive: pubIdOf(pkg) === activePublicationId()
+    alreadyActive: pkg.publicationId === activePublicationId()
   }
 
   for (const worldId of worldIds) {
@@ -239,7 +242,7 @@ export function preview(staged: StagedPackage): UpdatePreview {
 /** Import the staged package as a new canonical snapshot and switch to it. */
 export function activate(staged: StagedPackage): HubStatus {
   const pkg = staged.package
-  const publicationId = pubIdOf(pkg)
+  const publicationId = pkg.publicationId
   const previousActive = activePublicationId()
   const mediaDir = join(hubMediaRoot(), publicationId)
   const db = getDb()
@@ -347,7 +350,7 @@ export function rollback(): HubStatus {
   const staging = mkdtempSync(join(tmpRoot(), 'worldhub-stage-'))
   try {
     cpSync(source, staging, { recursive: true })
-    const pkg = loadPackage(staging, APP_TYPE)
+    const pkg = loadPackage(staging, APP_TYPE, READER_OPTIONS)
     semanticValidation(pkg)
     return activate({ package: pkg, stagingDir: staging, sourceType: 'rollback', sourcePath: source })
   } catch (err) {
@@ -375,12 +378,12 @@ function copyMedia(
   preferred: string[]
 ): string {
   if (!assetId) return ''
-  const entry = assetFile(pkg, assetId, preferred)
+  const entry = pkg.assetFile(assetId, preferred)
   if (!entry) return ''
   const suffix = extname(entry.path)
   const target = join(mediaDir, `${assetId}-${entry.recipeId}${suffix}`)
   mkdirSync(mediaDir, { recursive: true })
-  cpSync(packageAbsolute(pkg, entry.path), target)
+  cpSync(pkg.absolute(entry.path), target)
   // Stored relative to the media root so media:// can serve it.
   return target.slice(mediaRoot().length + 1).replace(/\\/g, '/')
 }
@@ -415,9 +418,10 @@ function deriveLoreKeywords(title: string, entityNames: string[]): string[] {
  * re-import publications that were packaged under the older contract and their
  * art must keep resolving.
  */
-const WIDE_RECIPES = ['tile_16x9', 'landscape_16x9']
-const PORTRAIT_RECIPES = ['portrait_3x4', 'portrait_9x16']
-const TILE_RECIPES = ['tile_16x9', 'square', 'thumbnail_square']
+/* Recipe names are World Hub's to choose and they change. Asking the package
+   which recipes its own contract declares for a set means a rename over there
+   needs no edit here — and the reader falls back through `renamedFrom`, so art
+   published under a retired name still resolves. */
 
 function importContent(
   db: Database,
@@ -425,7 +429,7 @@ function importContent(
   publicationId: string,
   mediaDir: string
 ): void {
-  const entities = entitiesById(pkg)
+  const entities = pkg.entitiesById()
   const content = pkg.content
   const selections = content['selections'] ?? {}
   const assetSets = content['assetSets'] ?? {}
@@ -461,12 +465,12 @@ function importContent(
     const entity = entities.get(hubWorldId)!
     const profile = worldProfiles.get(hubWorldId) ?? {}
     const values = entityValues[hubWorldId] ?? {}
-    const cover = copyMedia(pkg, mediaDir, setAsset('cb_world_cover', hubWorldId), WIDE_RECIPES)
+    const cover = copyMedia(pkg, mediaDir, setAsset('cb_world_cover', hubWorldId), pkg.recipesFor('cb_world_cover'))
     const background = copyMedia(
       pkg,
       mediaDir,
       setAsset('session_background', hubWorldId),
-      WIDE_RECIPES
+      pkg.recipesFor('session_background')
     )
     const row = upsertWorld.get(
       entity['name'],
@@ -506,7 +510,7 @@ function importContent(
       pkg,
       mediaDir,
       setAsset('location_background', hubPlaceId),
-      WIDE_RECIPES
+      pkg.recipesFor('location_background')
     )
     upsertLocation.run(
       worldLocal,
@@ -545,7 +549,7 @@ function importContent(
     if (worldLocal === undefined) {
       throw new PackageError("A character's world is not part of the package.")
     }
-    const tile = copyMedia(pkg, mediaDir, setAsset('tile', hubCharacterId), TILE_RECIPES)
+    const tile = copyMedia(pkg, mediaDir, setAsset('tile', hubCharacterId), pkg.recipesFor('tile'))
 
     // The neutral sprite (or the profile portrait) becomes the portrait column;
     // every other expression becomes a character_sprites row with a bare call sign.
@@ -560,12 +564,9 @@ function importContent(
     let portraitPath = ''
     const neutral = sprites.find((s) => s.expression === 'neutral')
     if (neutral) {
-      portraitPath = copyMedia(pkg, mediaDir, neutral.assetId, PORTRAIT_RECIPES)
+      portraitPath = copyMedia(pkg, mediaDir, neutral.assetId, pkg.recipesFor('sprites'))
     } else if (profile['portraitAssetId']) {
-      portraitPath = copyMedia(pkg, mediaDir, profile['portraitAssetId'], [
-        ...PORTRAIT_RECIPES,
-        'square'
-      ])
+      portraitPath = copyMedia(pkg, mediaDir, profile['portraitAssetId'], pkg.recipesFor('sprites'))
     }
 
     const row = upsertCharacter.get(
@@ -597,7 +598,7 @@ function importContent(
     let order = 0
     for (const sprite of sprites) {
       if (sprite.expression === 'neutral' || !sprite.expression) continue
-      const path = copyMedia(pkg, mediaDir, sprite.assetId, PORTRAIT_RECIPES)
+      const path = copyMedia(pkg, mediaDir, sprite.assetId, pkg.recipesFor('sprites'))
       if (!path) continue
       const callSign = sprite.expression.replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+/, '')
       if (!callSign) continue
@@ -628,7 +629,7 @@ function importContent(
   )
   const documentIds: string[] = []
   for (const document of pkg.documents) {
-    const body = readFileSync(packageAbsolute(pkg, document['path']), 'utf8')
+    const body = readFileSync(pkg.absolute(document['path'] as string), 'utf8')
     let targetWorld: number | undefined
     const referencedNames: string[] = []
     for (const entityId of document['entityIds'] ?? []) {
@@ -709,7 +710,7 @@ function writeReceipt(pkg: PackageInfo, staged: StagedPackage, storedAt: string)
     storedAt,
     packageFingerprint: pkg.checksums['manifest.json'] ?? ''
   }
-  atomicWrite(join(receiptsDir(), `${pubIdOf(pkg)}.json`), JSON.stringify(receipt, null, 2))
+  atomicWrite(join(receiptsDir(), `${pkg.publicationId}.json`), JSON.stringify(receipt, null, 2))
 }
 
 function writePointer(publicationId: string, previous: string | null): void {

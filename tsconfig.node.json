@@ -16,8 +16,9 @@
     "forceConsistentCasingInFileNames": true,
     "paths": {
       "@shared/*": ["./src/shared/*"],
-      "@main/*": ["./src/main/*"]
+      "@main/*": ["./src/main/*"],
+      "@worldhub-kit/*": ["./vendor/worldhub-kit/*"]
     }
   },
-  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "tests/main/**/*", "electron.vite.config.ts"]
+  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "tests/main/**/*", "vendor/worldhub-kit/js/**/*", "electron.vite.config.ts"]
 }

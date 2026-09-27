@@ -1,4 +1,8 @@
-/** One-shot prompts: summary, impersonation, continuation, memory suggestions. */
+/**
+ * Prompts that steer a turn with a trailing message rather than by rewriting
+ * the system section: the summary and memory passes, impersonation, the
+ * continuation, the directed reply, and the extra's turn.
+ */
 
 import type { Character, Memory, MemoryProposal, Message, Persona, Scene } from '@shared/types'
 import type { ChatMessage } from '../providers/openaiCompat'
@@ -14,6 +18,8 @@ function transcriptLines(characters: Character[], history: Message[]): string[] 
       lines.push(`User: ${m.content}`)
     } else if (m.role === 'narrator') {
       lines.push(m.content)
+    } else if (m.role === 'extra') {
+      lines.push(`${m.speakerName || 'Someone'}: ${m.content}`)
     } else {
       const name = (m.characterId != null && nameById.get(m.characterId)) || characters[0]?.name
       lines.push(name ? `${name}: ${m.content}` : m.content)
@@ -74,6 +80,68 @@ export function buildImpersonationPrompt(
     ...context.messages,
     { role: 'user', content: impersonationInstruction(persona.name, draft) }
   ]
+}
+
+/**
+ * Closes a turn that has been directed at someone. A trailing assistant message
+ * would read as a prefill to some models, so the turn is closed with a user
+ * turn instead. Never persisted or shown.
+ */
+export function directReplyInstruction(name: string): string {
+  return (
+    `[Turn control: ${name} now responds directly to the previous reply. ` +
+    'Do not write for anyone else.]'
+  )
+}
+
+export interface ExtraTurnInput {
+  /** Who the writer asked for, if they said; '' lets the model decide. */
+  hint?: string
+  /** Extras already standing in the scene, so one of them can speak again. */
+  known?: string[]
+  /** The extra speaks into the transcript as it stands, with no user turn. */
+  respondToLatest?: boolean
+}
+
+/**
+ * The OOC turn that hands one reply to someone who is not in the cast.
+ *
+ * Like impersonation, this contradicts the system section on purpose and does
+ * it from the end of the prompt, where it costs nothing: the alternative is
+ * rewriting token zero every time the scene calls on a passer-by. The brief is
+ * as much about restraint as about invention — an extra who resolves the scene
+ * has taken it from the cast.
+ */
+export function extraTurnInstruction(input: ExtraTurnInput = {}): string {
+  const { hint = '', known = [], respondToLatest = false } = input
+  let text =
+    '[OOC: For this one turn the reply comes from an extra — someone the scene ' +
+    'has put within earshot who is not in the cast and has no profile. Work ' +
+    'out from the setting and the last few turns who that most plausibly is: ' +
+    'the driver of the taxi they are sitting in, the barman, the person at the ' +
+    'next table. Improvise them on the spot. They are a supporting player: ' +
+    'give them a voice of their own, keep them short, and use them to move the ' +
+    'scene or to press the cast — never to resolve it, and never to take it ' +
+    'over. Do not write for the user or for any cast member. Begin with their ' +
+    'name or role in curly brackets, e.g. {Taxi driver}, and use that same ' +
+    'label every time this person speaks. No sprite call sign. Output ONLY ' +
+    'their turn: no explanation, no speaker label beyond the bracketed name, ' +
+    'and no comment on this instruction.]'
+  if (known.length) {
+    text +=
+      `\n\n[Extras already in this scene: ${known.map((n) => `{${n}}`).join(', ')}. ` +
+      'If one of them is the person who would plausibly speak, use them again ' +
+      'under exactly that label rather than inventing someone new.]'
+  }
+  if (hint.trim()) {
+    text += `\n\n[The scene calls on: ${hint.trim()}.]`
+  }
+  if (respondToLatest) {
+    text +=
+      '\n\n[They speak into the conversation as it stands. Continue the ' +
+      'exchange without waiting for or inventing a user message.]'
+  }
+  return text
 }
 
 export const CONTINUE_INSTRUCTION =

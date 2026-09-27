@@ -106,6 +106,7 @@ export function registerIpcHandlers(): void {
   handle('messages:count', messages.countMessages)
   handle('messages:update', messages.updateMessage)
   handle('messages:delete', messages.deleteMessage)
+  handle('messages:renameExtra', messages.renameExtra)
 
   handle('templates:list', templates.listSceneTemplates)
   handle('templates:save', templates.saveSceneTemplate)

@@ -4,6 +4,8 @@ import {
   buildImpersonationPrompt,
   buildMemorySuggestionPrompt,
   buildSummaryPrompt,
+  directReplyInstruction,
+  extraTurnInstruction,
   CONTINUE_INSTRUCTION
 } from '@main/prompt/auxPrompts'
 import type { BuiltPrompt } from '@main/prompt/promptBuilder'
@@ -21,6 +23,7 @@ function msg(role: Message['role'], content: string, extra: Partial<Message> = {
     sceneId: 1,
     role,
     characterId: role === 'character' ? 11 : null,
+    speakerName: '',
     content,
     emotion: '',
     deletedAt: null,
@@ -34,6 +37,7 @@ const history = [
   msg('character', '"Who is there?"'),
   msg('character', '"Show yourself."', { characterId: 12 }),
   msg('narrator', '*Wind rises.*'),
+  msg('extra', '"Where to, then?"', { speakerName: 'Taxi driver' }),
   msg('user', 'deleted line', { deletedAt: 'x' })
 ]
 
@@ -47,6 +51,59 @@ describe('buildSummaryPrompt', () => {
     expect(transcript).toContain('Morgana: "Show yourself."')
     expect(transcript).toContain('*Wind rises.*')
     expect(transcript).not.toContain('deleted line')
+  })
+
+  it('labels an extra by its own name, so the summary does not credit the cast', () => {
+    const transcript = buildSummaryPrompt([lirael, morgana], scene, history)[1]!.content
+    expect(transcript).toContain('Taxi driver: "Where to, then?"')
+    expect(transcript).not.toContain('Lirael: "Where to, then?"')
+  })
+
+  it('falls back to a plain label for an extra that never got a name', () => {
+    const transcript = buildSummaryPrompt(
+      [lirael],
+      scene,
+      [msg('extra', '"Mind the step."')]
+    )[1]!.content
+    expect(transcript).toContain('Someone: "Mind the step."')
+  })
+})
+
+describe('extraTurnInstruction', () => {
+  it('asks for a bracketed name and keeps the extra a supporting player', () => {
+    const text = extraTurnInstruction()
+    expect(text).toContain('{Taxi driver}')
+    expect(text).toContain('not in the cast')
+    expect(text).toContain('never to resolve it')
+    expect(text).toContain('No sprite call sign')
+  })
+
+  it('names the extras already in the scene so one of them speaks again', () => {
+    const text = extraTurnInstruction({ known: ['Taxi driver', 'Barman'] })
+    expect(text).toContain('{Taxi driver}, {Barman}')
+    expect(text).toContain('rather than inventing someone new')
+  })
+
+  it('passes the writer’s hint through when they said who', () => {
+    expect(extraTurnInstruction({ hint: '  the driver  ' })).toContain(
+      '[The scene calls on: the driver.]'
+    )
+    expect(extraTurnInstruction({ hint: '   ' })).not.toContain('The scene calls on')
+  })
+
+  it('says to speak into the transcript when no user turn is coming', () => {
+    expect(extraTurnInstruction({ respondToLatest: true })).toContain(
+      'without waiting for or inventing a user message'
+    )
+    expect(extraTurnInstruction()).not.toContain('without waiting for or inventing')
+  })
+})
+
+describe('directReplyInstruction', () => {
+  it('closes the turn on one named voice', () => {
+    const text = directReplyInstruction('Morgana')
+    expect(text).toContain('Morgana now responds directly')
+    expect(text).toContain('Do not write for anyone else')
   })
 })
 

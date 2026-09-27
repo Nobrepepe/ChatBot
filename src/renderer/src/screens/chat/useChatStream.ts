@@ -11,6 +11,8 @@ export interface ChatStreamState {
    */
   status: string | null
   busy: boolean
+  /** What the turn on screen was asked for — who is answering, and how. */
+  started: ChatStartParams | null
   start: (params: ChatStartParams) => Promise<void>
   cancel: () => void
 }
@@ -25,6 +27,7 @@ export function useChatStream(
 ): ChatStreamState {
   const [streamText, setStreamText] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
+  const [started, setStarted] = useState<ChatStartParams | null>(null)
   const requestIdRef = useRef<number | null>(null)
   const doneRef = useRef(onDone)
   const errorRef = useRef(onError)
@@ -56,6 +59,7 @@ export function useChatStream(
   const start = useCallback(async (params: ChatStartParams) => {
     if (requestIdRef.current !== null) return
     setStatus(null)
+    setStarted(params)
     setStreamText('')
     requestIdRef.current = await call('chat:start', params)
   }, [])
@@ -68,5 +72,12 @@ export function useChatStream(
 
   // A turn that is running an automatic pass has no stream text left but is
   // still busy: the composer must stay locked until 'done'.
-  return { streamText, status, busy: streamText !== null || status !== null, start, cancel }
+  return {
+    streamText,
+    status,
+    busy: streamText !== null || status !== null,
+    started,
+    start,
+    cancel
+  }
 }

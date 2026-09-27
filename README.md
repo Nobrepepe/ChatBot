@@ -26,12 +26,19 @@ starting fresh each session.
 - **Scene templates**: save a setup and start future scenes from it
 - **Multi-character scenes**: characters reply in labeled turns with distinct
   voices; a **Choose responder** action lets one character answer another directly
+- **Extras**: the people a scene put within earshot and never wrote down — the
+  taxi driver, the barman, the voice at the next table. *Let someone else
+  answer now* reads the scene and improvises whoever would plausibly speak,
+  or you can name them. Their turn is theirs, under their own name; they stay
+  consistent for as long as the scene keeps them, and drop out once they have
+  fallen out of the history window. No profile, no memories, nothing to fill in
 - **Two display modes per scene**: rolling chat, or **visual novel mode** showing
   the latest line over the scene art with a backlog viewer
 - **Response controls**: regenerate, edit, delete, **Stop** mid-generation,
   save any reply as a memory, **Impersonate** (draft your persona's next turn),
   and **Save & continue** — trim a reply in the editor and the AI finishes it
-  without regenerating what you kept
+  without regenerating what you kept. Regenerating an extra's turn asks for
+  that same extra, and their name can be corrected across the whole scene
 - **Memory / canon system**: canon facts and relationship state per character,
   injected into every prompt. **Memory proposals** work like the note proposals
   below: the model is shown what the character already remembers, with stable

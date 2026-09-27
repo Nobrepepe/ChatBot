@@ -7,6 +7,7 @@ interface MessageRow {
   scene_id: number
   role: string
   character_id: number | null
+  speaker_name: string
   content: string
   emotion: string
   deleted_at: string | null
@@ -19,6 +20,7 @@ function mapMessage(r: MessageRow): Message {
     sceneId: r.scene_id,
     role: r.role as MessageRole,
     characterId: r.character_id,
+    speakerName: r.speaker_name,
     content: r.content,
     emotion: r.emotion,
     deletedAt: r.deleted_at,
@@ -52,6 +54,8 @@ export interface NewMessage {
   role: MessageRole
   content: string
   characterId?: number | null
+  /** The improvised name an extra's turn carries; '' for every other role. */
+  speakerName?: string
   emotion?: string
 }
 
@@ -60,10 +64,18 @@ export function addMessage(input: NewMessage): number {
   const ts = now()
   const info = db
     .prepare(
-      `INSERT INTO messages (scene_id, role, character_id, content, emotion, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO messages (scene_id, role, character_id, speaker_name, content, emotion, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(input.sceneId, input.role, input.characterId ?? null, input.content, input.emotion ?? '', ts)
+    .run(
+      input.sceneId,
+      input.role,
+      input.characterId ?? null,
+      input.speakerName ?? '',
+      input.content,
+      input.emotion ?? '',
+      ts
+    )
   db.prepare('UPDATE scenes SET updated_at = ? WHERE id = ?').run(ts, input.sceneId)
   return Number(info.lastInsertRowid)
 }
@@ -74,6 +86,20 @@ export function updateMessage(id: number, content: string): void {
 
 export function updateMessageWithEmotion(id: number, content: string, emotion: string): void {
   getDb().prepare('UPDATE messages SET content = ?, emotion = ? WHERE id = ?').run(content, emotion, id)
+}
+
+/**
+ * Renames an extra everywhere in one scene. Models drift — {The driver} one
+ * turn and {Taxi driver} the next — and a rename that only caught the turn in
+ * front of you would leave the scene holding two people who are one person.
+ */
+export function renameExtra(sceneId: number, from: string, to: string): void {
+  getDb()
+    .prepare(
+      `UPDATE messages SET speaker_name = ?
+       WHERE scene_id = ? AND role = 'extra' AND speaker_name = ?`
+    )
+    .run(to, sceneId, from)
 }
 
 /** Soft delete: the row survives, prompts and exports skip it. */

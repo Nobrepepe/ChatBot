@@ -42,6 +42,59 @@ Previously: They parted badly on the pier.",
 ]
 `;
 
+exports[`buildPrompt > an extra turns labels on in a single-character scene 1`] = `
+[
+  {
+    "content": "## System instructions
+You are playing the character "Lirael" in the world "Eden Castle".
+This is an in-world roleplay. Respond as the character, in character at all times. Write dialogue in quotes and brief third-person narration for the character's actions when it helps the scene. Never speak or act for the user. Do not reveal the character's secrets too easily. Ask questions when natural. Keep replies to a few paragraphs at most.
+
+More than one voice can speak in this scene. Rules:
+- Only speak for the listed characters, never for the user.
+- Exactly one voice responds per assistant turn.
+- Begin with that voice's name in curly brackets, e.g. '{Daniela}'.
+- Keep each character's voice distinct, following their profiles.
+- When a next responder is explicitly selected, only that voice responds.
+
+The scene also has extras: people it has put within earshot who have no profile. So far: "Taxi driver". Their turns are labelled the same way. Do not write an extra unless a turn explicitly asks for one.
+
+Do not write standalone scene narration paragraphs; stay with the character's dialogue and brief inline action beats.
+
+## World
+World name: Eden Castle
+Genre: Gothic fantasy
+Tone: Melancholy
+Summary: A castle that remembers its dead.
+Setting description:
+Endless corridors.
+Portraits that watch.
+Style guide: Slow, sensory prose.
+
+## Character profile
+Name: Lirael
+Summary: Lirael in one line.
+Personality: Lirael is wry.
+
+## Scene
+Scene title: The rooftop
+Previously: They parted badly on the pier.",
+    "role": "system",
+  },
+  {
+    "content": "Where to?",
+    "role": "user",
+  },
+  {
+    "content": "{Lirael} Anywhere but here.",
+    "role": "assistant",
+  },
+  {
+    "content": "{Taxi driver} "Downtown it is."",
+    "role": "assistant",
+  },
+]
+`;
+
 exports[`buildPrompt > includes memories, lore and persona sections 1`] = `
 [
   {
@@ -99,12 +152,12 @@ exports[`buildPrompt > multi-character with responder lock and respond-to-latest
 You are playing the characters "Lirael", "Morgana" in the world "Eden Castle".
 This is an in-world roleplay. Respond as the character, in character at all times. Write dialogue in quotes and brief third-person narration for the character's actions when it helps the scene. Never speak or act for the user. Do not reveal the character's secrets too easily. Ask questions when natural. Keep replies to a few paragraphs at most.
 
-Multiple characters are present in this scene. Rules:
+More than one voice can speak in this scene. Rules:
 - Only speak for the listed characters, never for the user.
-- Exactly one character responds per assistant turn.
-- Begin with that character's name in curly brackets, e.g. '{Daniela}'.
+- Exactly one voice responds per assistant turn.
+- Begin with that voice's name in curly brackets, e.g. '{Daniela}'.
 - Keep each character's voice distinct, following their profiles.
-- When a next responder is explicitly selected, only that character responds.
+- When a next responder is explicitly selected, only that voice responds.
 
 For the next reply, only "Morgana" may respond. Begin the reply with {Morgana}, followed by the emotion tag.
 

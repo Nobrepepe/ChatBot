@@ -6,7 +6,16 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Character, Memory, MemoryProposal, Persona, Scene, World } from '@shared/types'
+import type {
+  Character,
+  Memory,
+  MemoryProposal,
+  Message,
+  Persona,
+  Scene,
+  World
+} from '@shared/types'
+import type { Responder } from '@shared/ipc'
 import { parseEmotion, parseSpeakerPrefix, stripWirePrefixes } from '@shared/wireFormat'
 import { exportsDir } from '../paths'
 import * as scenesRepo from '../db/repo/scenes'
@@ -28,7 +37,9 @@ import {
   buildContinuationPrompt,
   buildImpersonationPrompt,
   buildMemorySuggestionPrompt,
-  buildSummaryPrompt
+  buildSummaryPrompt,
+  directReplyInstruction,
+  extraTurnInstruction
 } from '../prompt/auxPrompts'
 import { streamChat, type ChatMessage } from '../providers/openaiCompat'
 import { parseMemoryActions, parseMemoryBullets, type MemoryAction } from './memoriesService'
@@ -80,9 +91,18 @@ export function spriteMap(responder: Character): Record<string, string> {
   return map
 }
 
+/**
+ * Who this turn was asked of, once the scene has been loaded. A cast member is
+ * a row; an extra is only ever a name, and an empty one means the model works
+ * out from the scene who is plausibly there.
+ */
+export type ResolvedResponder =
+  | { kind: 'character'; character: Character }
+  | { kind: 'extra'; name: string }
+
 export interface BuildOptions {
   beforeMessageId?: number
-  responderId?: number | null
+  responder?: Responder
   respondToLatest?: boolean
 }
 
@@ -90,10 +110,27 @@ export interface BuildResult {
   built: BuiltPrompt
   ctx: ChatContext
   loreMatches: LoreMatch[]
-  responder: Character
+  /** Who the turn was asked of. */
+  responder: ResolvedResponder
+  /**
+   * The cast member the prompt is written around: the sprite owner, and the
+   * speaker a reply falls back to. An extra request leaves this exactly where
+   * it would otherwise be, which is what keeps the system section — and the
+   * server's prefix cache — untouched by asking for a passer-by.
+   */
+  lead: Character
   emotionTags: boolean
-  /** call signs valid for the responder, bare */
+  /** call signs valid for the lead, bare */
   callSigns: string[]
+}
+
+/** The extras standing in the window the model will actually be sent. */
+function knownExtras(history: Message[], limit: number): string[] {
+  const visible = history.filter((m) => !m.deletedAt && m.role !== 'system-note')
+  const window = visible.length > limit ? visible.slice(-limit) : visible
+  return [
+    ...new Set(window.filter((m) => m.role === 'extra' && m.speakerName).map((m) => m.speakerName))
+  ]
 }
 
 export function build(sceneId: number, options: BuildOptions = {}): BuildResult {
@@ -117,11 +154,23 @@ export function build(sceneId: number, options: BuildOptions = {}): BuildResult 
 
   const loreMatches = matchLore(loreRepo.listLoreEntries(ctx.world.id), ctx.scene, history)
 
-  const responder =
-    (options.responderId != null && ctx.characters.find((c) => c.id === options.responderId)) ||
-    ctx.characters[0]!
+  const asked = options.responder
+  // An extra never becomes the lead: the prompt stays written around the cast
+  // member it would have been written around anyway — including the responder
+  // lock, which the trailing OOC turn then overrides the way impersonation
+  // overrides "never speak for the user". Calling on a passer-by therefore
+  // costs nothing at token zero.
+  const leadId = asked?.kind === 'extra' ? asked.leadId : asked?.characterId
+  const lead =
+    (leadId != null && ctx.characters.find((c) => c.id === leadId)) || ctx.characters[0]!
+  const responder: ResolvedResponder =
+    asked?.kind === 'extra'
+      ? { kind: 'extra', name: (asked.name ?? '').trim() }
+      : { kind: 'character', character: lead }
+
+  const limit = historyLimit()
   const emotionTags = emotionTagsEnabled(ctx)
-  const sprites = emotionTags ? spriteMap(responder) : null
+  const sprites = emotionTags ? spriteMap(lead) : null
 
   const built = buildPrompt({
     world: ctx.world,
@@ -131,24 +180,29 @@ export function build(sceneId: number, options: BuildOptions = {}): BuildResult 
     loreMatches,
     persona: ctx.persona,
     history,
-    historyLimit: historyLimit(),
+    historyLimit: limit,
     emotionTags,
     sprites,
-    responder: ctx.characters.length > 1 ? responder : null,
-    respondToLatest: options.respondToLatest ?? false,
+    responder: ctx.characters.length > 1 ? lead : null,
+    respondToLatest: responder.kind === 'character' && (options.respondToLatest ?? false),
     systemPrompt: settings.systemPrompt,
     loreBudget: loreBudget()
   })
 
-  // A trailing assistant message would read as a prefill to some models; close
-  // the turn with an explicit control message instead. Never persisted or shown.
-  if (options.respondToLatest && ctx.characters.length > 1) {
+  // One place closes the turn. A trailing assistant message would read as a
+  // prefill to some models, so a turn that has been directed at someone is
+  // closed with a user turn. Never persisted or shown.
+  if (responder.kind === 'extra') {
     built.messages.push({
       role: 'user',
-      content:
-        `[Turn control: ${responder.name} now responds directly to the previous ` +
-        'reply. Do not write for anyone else.]'
+      content: extraTurnInstruction({
+        hint: responder.name,
+        known: knownExtras(history, limit),
+        respondToLatest: options.respondToLatest ?? false
+      })
     })
+  } else if (options.respondToLatest && ctx.characters.length > 1) {
+    built.messages.push({ role: 'user', content: directReplyInstruction(lead.name) })
   }
 
   return {
@@ -156,6 +210,7 @@ export function build(sceneId: number, options: BuildOptions = {}): BuildResult 
     ctx,
     loreMatches,
     responder,
+    lead,
     emotionTags,
     callSigns: sprites ? Object.keys(sprites) : []
   }
@@ -168,16 +223,24 @@ export function addUserMessage(sceneId: number, content: string): number {
 export interface SavedReply {
   messageId: number
   characterId: number | null
+  /** The extra's name, or '' when a cast member answered. */
+  speakerName: string
   emotion: string
   content: string
 }
+
+/** The label an extra falls back to when the reply carried no name at all. */
+export const UNNAMED_EXTRA = 'Someone'
 
 /**
  * Parse the finished raw stream text ({Name} and [emotion] wire tags) and
  * persist a clean structured row.
  */
 export function saveReply(sceneId: number, raw: string, buildResult: BuildResult): SavedReply {
-  const { ctx, responder, callSigns } = buildResult
+  const { ctx, responder, lead, callSigns } = buildResult
+
+  if (responder.kind === 'extra') return saveExtraReply(sceneId, raw, buildResult)
+
   const names = ctx.characters.map((c) => c.name)
   const speaker = parseSpeakerPrefix(raw, names)
   const afterSpeaker = speaker ? speaker.rest : raw
@@ -186,8 +249,8 @@ export function saveReply(sceneId: number, raw: string, buildResult: BuildResult
 
   const speakerCharacter = speaker
     ? ctx.characters.find((c) => c.name === speaker.name)
-    : responder
-  const characterId = speakerCharacter?.id ?? responder.id
+    : responder.character
+  const characterId = speakerCharacter?.id ?? lead.id
 
   const messageId = messagesRepo.addMessage({
     sceneId,
@@ -196,17 +259,55 @@ export function saveReply(sceneId: number, raw: string, buildResult: BuildResult
     content,
     emotion
   })
-  return { messageId, characterId, emotion, content }
+  return { messageId, characterId, speakerName: '', emotion, content }
 }
 
+/**
+ * An extra's turn. The {Name} tag is read unrestricted here — the whole point
+ * is a name the app has never seen — and a model that answered as a cast
+ * member anyway is taken at its word rather than having the line reattributed
+ * to a stranger. Extras have no sprites, so a stray call sign is stripped from
+ * the text instead of being stored.
+ */
+function saveExtraReply(sceneId: number, raw: string, buildResult: BuildResult): SavedReply {
+  const { ctx, responder, callSigns } = buildResult
+  const asked = responder.kind === 'extra' ? responder.name : ''
+  const speaker = parseSpeakerPrefix(raw)
+  const afterSpeaker = speaker ? speaker.rest : raw
+
+  const castMember = speaker
+    ? ctx.characters.find((c) => c.name.toLowerCase() === speaker.name.toLowerCase())
+    : undefined
+  if (castMember) {
+    const { emotion, rest } = parseEmotion(afterSpeaker, callSigns.length ? callSigns : undefined)
+    const content = rest.trim()
+    const messageId = messagesRepo.addMessage({
+      sceneId,
+      role: 'character',
+      characterId: castMember.id,
+      content,
+      emotion
+    })
+    return { messageId, characterId: castMember.id, speakerName: '', emotion, content }
+  }
+
+  const speakerName = speaker?.name.trim() || asked || UNNAMED_EXTRA
+  const content = parseEmotion(afterSpeaker).rest.trim()
+  const messageId = messagesRepo.addMessage({
+    sceneId,
+    role: 'extra',
+    speakerName,
+    content
+  })
+  return { messageId, characterId: null, speakerName, emotion: '', content }
+}
+
+/** The prompt is built once per turn and streamed from; the caller keeps it for saveReply. */
 export async function* streamReply(
-  sceneId: number,
-  options: BuildOptions,
+  buildResult: BuildResult,
   signal: AbortSignal
 ): AsyncGenerator<string> {
-  const result = build(sceneId, options)
-  const settings = settingsRepo.getSettings()
-  yield* streamChat(result.built.messages, settings, signal)
+  yield* streamChat(buildResult.built.messages, settingsRepo.getSettings(), signal)
 }
 
 export async function* streamContinuation(
@@ -265,7 +366,9 @@ export function exportScene(sceneId: number): string {
         ? (ctx.persona?.name ?? 'You')
         : m.role === 'narrator'
           ? 'Narrator'
-          : ((m.characterId != null && nameById.get(m.characterId)) ?? ctx.characters[0]!.name)
+          : m.role === 'extra'
+            ? m.speakerName || UNNAMED_EXTRA
+            : ((m.characterId != null && nameById.get(m.characterId)) ?? ctx.characters[0]!.name)
     lines.push(`**${speaker}:** ${m.content}`, '')
   }
   const dir = exportsDir()

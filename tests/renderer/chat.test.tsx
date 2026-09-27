@@ -314,7 +314,9 @@ describe('a multi-character scene', () => {
     await userEvent.type(screen.getByPlaceholderText('Say something'), 'who is there?')
     await userEvent.keyboard('{Enter}')
     await waitFor(() => expect(api.callsTo('chat:start')).toHaveLength(1))
-    expect(api.callsTo('chat:start')[0]![0]).toMatchObject({ responderId: 11 })
+    expect(api.callsTo('chat:start')[0]![0]).toMatchObject({
+      responder: { kind: 'character', characterId: 11 }
+    })
   })
 
   it('lets a character answer the previous reply directly', async () => {
@@ -325,7 +327,11 @@ describe('a multi-character scene', () => {
 
     await waitFor(() => expect(api.callsTo('chat:start')).toHaveLength(1))
     const [params] = api.callsTo('chat:start')[0] as [any]
-    expect(params).toMatchObject({ kind: 'reply', responderId: 11, respondToLatest: true })
+    expect(params).toMatchObject({
+      kind: 'reply',
+      responder: { kind: 'character', characterId: 11 },
+      respondToLatest: true
+    })
     expect(params.userMessage).toBeUndefined()
     // Generation begins with the transcript back at full width.
     expect(screen.queryByRole('button', { name: /Let Kaguya answer now/ })).not.toBeInTheDocument()
@@ -339,11 +345,13 @@ describe('a multi-character scene', () => {
     expect(screen.queryByText('Ayame will answer next.')).not.toBeInTheDocument()
   })
 
-  it('offers no responder rail for a single character', async () => {
+  it('still opens the rail for a single character, who is no longer the only voice', async () => {
     seed({ characterIds: [10] })
     renderRoute('/chat/5')
     await screen.findByPlaceholderText('Say something')
-    expect(screen.queryByRole('button', { name: /^Next:/ })).not.toBeInTheDocument()
+    await userEvent.click(await screen.findByRole('button', { name: 'Next: Ayame' }))
+    expect(await screen.findByText('Ayame will answer next.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Extras →' })).toBeInTheDocument()
   })
 })
 
@@ -551,15 +559,188 @@ describe('scene tools', () => {
   })
 })
 
+describe('extras — the people the scene put within earshot', () => {
+  const openRail = async (): Promise<void> => {
+    await userEvent.click(await screen.findByRole('button', { name: /^Next:/ }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Extras →' }))
+  }
+
+  it('keeps the extras one step in, so the cast has the rail', async () => {
+    seed()
+    renderRoute('/chat/5')
+    await userEvent.click(await screen.findByRole('button', { name: /^Next:/ }))
+    expect(await screen.findByText('Ayame will answer next.')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Who speaks — optional')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Extras →' }))
+    expect(screen.getByLabelText('Who speaks — optional')).toBeInTheDocument()
+    expect(screen.queryByText('Ayame will answer next.')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: '← Cast' }))
+    expect(screen.getByText('Ayame will answer next.')).toBeInTheDocument()
+  })
+
+  it('closes the extras before the cast on Escape', async () => {
+    seed()
+    renderRoute('/chat/5')
+    await openRail()
+    await userEvent.keyboard('{Escape}')
+    expect(screen.getByText('Ayame will answer next.')).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByText('Ayame will answer next.')).not.toBeInTheDocument()
+
+    // Opened again, the rail starts from the cast.
+    await userEvent.click(screen.getByRole('button', { name: /^Next:/ }))
+    expect(await screen.findByText('Ayame will answer next.')).toBeInTheDocument()
+  })
+
+  it('asks for someone else without adding a user turn', async () => {
+    seed()
+    renderRoute('/chat/5')
+    await openRail()
+    await userEvent.click(screen.getByRole('button', { name: /Let someone else answer now/ }))
+
+    await waitFor(() => expect(api.callsTo('chat:start')).toHaveLength(1))
+    const [params] = api.callsTo('chat:start')[0] as [any]
+    expect(params).toMatchObject({
+      kind: 'reply',
+      responder: { kind: 'extra', name: '' },
+      respondToLatest: true
+    })
+    expect(params.userMessage).toBeUndefined()
+  })
+
+  it('passes on who the writer asked for', async () => {
+    seed()
+    renderRoute('/chat/5')
+    await openRail()
+    await userEvent.type(screen.getByLabelText('Who speaks — optional'), 'the driver')
+    await userEvent.click(screen.getByRole('button', { name: /Let someone else answer now/ }))
+
+    await waitFor(() => expect(api.callsTo('chat:start')).toHaveLength(1))
+    expect(api.callsTo('chat:start')[0]![0]).toMatchObject({
+      responder: { kind: 'extra', name: 'the driver', leadId: 10 }
+    })
+  })
+
+  it('sends what is in the composer, so the extra answers it', async () => {
+    seed()
+    renderRoute('/chat/5')
+    await userEvent.type(await screen.findByPlaceholderText('Say something'), 'take me downtown')
+    await openRail()
+    await userEvent.click(screen.getByRole('button', { name: /Let someone else answer now/ }))
+
+    await waitFor(() => expect(api.callsTo('chat:start')).toHaveLength(1))
+    expect(api.callsTo('chat:start')[0]![0]).toMatchObject({
+      userMessage: 'take me downtown',
+      responder: { kind: 'extra' },
+      respondToLatest: false
+    })
+  })
+
+  it('names the extra over their turn, and keeps offering them', async () => {
+    seed({
+      messages: [
+        makeMessage({ id: 100, sceneId: 5, role: 'user', content: 'Where to?' }),
+        makeMessage({
+          id: 101,
+          sceneId: 5,
+          role: 'extra',
+          speakerName: 'Taxi driver',
+          content: '"Downtown it is."'
+        })
+      ]
+    })
+    renderRoute('/chat/5')
+    expect(await screen.findByText('Taxi driver')).toBeInTheDocument()
+    expect(screen.getByText(/Downtown it is/)).toBeInTheDocument()
+
+    await userEvent.click(await screen.findByRole('button', { name: /^Next:/ }))
+    // The cast says who is still around without opening the extras.
+    const extras = screen.getByRole('button', { name: 'Extras →' })
+    expect(extras).toHaveAttribute('title', 'Taxi driver is still within earshot')
+    await userEvent.click(extras)
+    expect(
+      screen.getByRole('button', { name: /Let taxi driver answer now/ })
+    ).toBeInTheDocument()
+  })
+
+  it('shows the improvised name as it streams in, not the character’s', async () => {
+    seed()
+    renderRoute('/chat/5')
+    await openRail()
+    await userEvent.click(screen.getByRole('button', { name: /Let someone else answer now/ }))
+    await waitFor(() => expect(api.callsTo('chat:start')).toHaveLength(1))
+
+    await chunk('{Taxi driver} "Where to, then?"')
+    expect(screen.getByText('Taxi driver')).toBeInTheDocument()
+    expect(screen.queryByText(/\{Taxi driver\}/)).not.toBeInTheDocument()
+    expect(screen.getByText(/Where to, then/)).toBeInTheDocument()
+  })
+
+  it('regenerates an extra as that same extra, never as the cast', async () => {
+    seed({
+      messages: [
+        makeMessage({
+          id: 101,
+          sceneId: 5,
+          role: 'extra',
+          speakerName: 'Taxi driver',
+          content: '"Downtown it is."'
+        })
+      ]
+    })
+    renderRoute('/chat/5')
+    await userEvent.click(await screen.findByRole('button', { name: 'Regenerate' }))
+
+    await waitFor(() => expect(api.callsTo('chat:start')).toHaveLength(1))
+    expect(api.callsTo('chat:start')[0]![0]).toMatchObject({
+      responder: { kind: 'extra', name: 'Taxi driver' }
+    })
+  })
+
+  it('renames a drifting extra everywhere in the scene', async () => {
+    seed({
+      messages: [
+        makeMessage({
+          id: 101,
+          sceneId: 5,
+          role: 'extra',
+          speakerName: 'The driver',
+          content: '"Downtown it is."'
+        }),
+        makeMessage({
+          id: 102,
+          sceneId: 5,
+          role: 'extra',
+          speakerName: 'The driver',
+          content: '"Traffic is bad."'
+        })
+      ]
+    })
+    renderRoute('/chat/5')
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Edit' }))[0]!)
+    const field = await screen.findByLabelText('Who is speaking')
+    await userEvent.clear(field)
+    await userEvent.type(field, 'Taxi driver')
+    await userEvent.click(screen.getByRole('button', { name: /Save the message/ }))
+
+    await waitFor(() =>
+      expect(api.callsTo('messages:renameExtra')).toEqual([[5, 'The driver', 'Taxi driver']])
+    )
+    expect(await screen.findAllByText('Taxi driver')).toHaveLength(2)
+  })
+})
+
 describe('inviting a character', () => {
   beforeEach(() => seed({ messages: [makeMessage({ id: 100, sceneId: 5 })] }))
 
   it('offers only the characters who are not already here', async () => {
     renderRoute('/chat/5')
     await sceneAction('Invite character →')
-    expect(await screen.findByRole('dialog', { name: 'Who else is here?' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Kaguya/ })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Ayame/ })).not.toBeInTheDocument()
+    const dialog = await screen.findByRole('dialog', { name: 'Who else is here?' })
+    expect(within(dialog).getByRole('button', { name: /Kaguya/ })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: /Ayame/ })).not.toBeInTheDocument()
   })
 
   it('turns the scene into a group scene and says who arrived', async () => {

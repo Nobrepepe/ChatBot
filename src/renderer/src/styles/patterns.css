@@ -540,6 +540,9 @@
   gap: var(--space-4);
   background: linear-gradient(to right, transparent 0%, var(--bg) 8%, var(--bg) 100%);
   animation: rail-in var(--fade-route) var(--ease-out);
+  /* A short window must not put an action out of reach: the cast gives up
+     height first, and once it is down to its floor the rail itself scrolls. */
+  overflow-y: auto;
 }
 .rail::before {
   content: '';
@@ -562,10 +565,11 @@
     transform: translateX(20px);
   }
 }
-/* The cast scrolls on its own so the action below it stays anchored. */
+/* The cast scrolls on its own so the actions below it stay anchored — down to
+   a floor, past which squeezing it further stops making it readable. */
 .rail-scroll {
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 96px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -576,8 +580,23 @@
   align-items: baseline;
   gap: var(--space-4);
 }
+.rail-head-actions {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+/* A drawer laid over the rail's own content (the extras over the cast). It
+   takes the rail's place rather than stacking a second panel on it, and
+   arrives the way the rail does, so it reads as one step further in. */
+.rail-layer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  animation: rail-in var(--fade-route) var(--ease-out);
+}
 @media (prefers-reduced-motion: reduce) {
-  .rail {
+  .rail,
+  .rail-layer {
     animation: none;
   }
 }

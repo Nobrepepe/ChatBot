@@ -153,6 +153,7 @@ export function makeMessage(over: Partial<Message> = {}): Message {
     sceneId: 1,
     role: 'user',
     characterId: null,
+    speakerName: '',
     content: 'hello',
     emotion: '',
     deletedAt: null,
@@ -392,6 +393,16 @@ export function installFakeApi(seed: Partial<FakeStore> = {}): FakeApi {
     'messages:delete': (mid: number) => {
       const message = byId(store.messages, mid)
       if (message) message.deletedAt = NOW
+    },
+    'messages:renameExtra': (sid: number, from: string, to: string) => {
+      // Replaced rather than mutated: main hands back fresh rows from SQLite,
+      // and a query cache that is shown the same objects again decides nothing
+      // changed.
+      store.messages = store.messages.map((m) =>
+        m.sceneId === sid && m.role === 'extra' && m.speakerName === from
+          ? { ...m, speakerName: to }
+          : m
+      )
     },
 
     'templates:list': (wid: number) => store.templates.filter((t) => t.worldId === wid),

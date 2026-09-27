@@ -10,7 +10,7 @@ export type MemoryType = (typeof MEMORY_TYPES)[number]
 export const MEMORY_ACTION_TYPES = ['create', 'replace', 'forget'] as const
 export type MemoryActionType = (typeof MEMORY_ACTION_TYPES)[number]
 
-export const MESSAGE_ROLES = ['user', 'character', 'narrator', 'system-note'] as const
+export const MESSAGE_ROLES = ['user', 'character', 'extra', 'narrator', 'system-note'] as const
 export type MessageRole = (typeof MESSAGE_ROLES)[number]
 
 export const NOTE_CATEGORIES = ['Characters', 'Setting', 'Plot', 'Unsorted'] as const
@@ -125,8 +125,10 @@ export interface Message {
   id: number
   sceneId: number
   role: MessageRole
-  /** Structured speaker for character turns; null for user/narrator turns. */
+  /** Structured speaker for character turns; null for every other role. */
   characterId: number | null
+  /** The improvised name of an extra ('Taxi driver'); '' for every other role. */
+  speakerName: string
   /** Clean text: no {Name} prefix, no [emotion] tag. */
   content: string
   /** Bare call sign of the sprite the reply chose, or ''. */

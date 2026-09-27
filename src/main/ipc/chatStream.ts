@@ -43,16 +43,14 @@ export function startChatStream(params: ChatStartParams): number {
         if (params.userMessage?.trim()) {
           chat.addUserMessage(params.sceneId, params.userMessage.trim())
         }
+        // Built once and streamed from: the same prompt used to be constructed
+        // twice per turn, once here and once inside streamReply.
         const buildResult = chat.build(params.sceneId, {
-          responderId: params.responderId,
+          responder: params.responder,
           respondToLatest: params.respondToLatest
         })
         try {
-          for await (const delta of chat.streamReply(
-            params.sceneId,
-            { responderId: params.responderId, respondToLatest: params.respondToLatest },
-            controller.signal
-          )) {
+          for await (const delta of chat.streamReply(buildResult, controller.signal)) {
             received += delta
             emit({ requestId, type: 'chunk', delta })
           }

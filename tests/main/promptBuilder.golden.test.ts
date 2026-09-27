@@ -4,7 +4,8 @@ import {
   budgetLore,
   matchLore,
   spriteInstruction,
-  MULTI_CHARACTER_RULES,
+  extrasRule,
+  LABELLED_TURN_RULES,
   NARRATOR_INSTRUCTION,
   NO_NARRATOR_INSTRUCTION,
   type LoreMatch
@@ -88,6 +89,7 @@ function msg(role: Message['role'], content: string, extra: Partial<Message> = {
     sceneId: 5,
     role,
     characterId: role === 'character' ? 11 : null,
+    speakerName: '',
     content,
     emotion: '',
     deletedAt: null,
@@ -142,7 +144,7 @@ describe('buildPrompt', () => {
     const built = buildPrompt({ ...base, history: [msg('user', 'Hello?')] })
     expect(built.messages).toMatchSnapshot()
     expect(built.messages[0]!.content).toContain(NO_NARRATOR_INSTRUCTION)
-    expect(built.messages[0]!.content).not.toContain(MULTI_CHARACTER_RULES)
+    expect(built.messages[0]!.content).not.toContain(LABELLED_TURN_RULES)
   })
 
   it('multi-character with responder lock and respond-to-latest', () => {
@@ -158,13 +160,46 @@ describe('buildPrompt', () => {
       ]
     })
     const system = built.messages[0]!.content
-    expect(system).toContain(MULTI_CHARACTER_RULES)
+    expect(system).toContain(LABELLED_TURN_RULES)
     expect(system).toContain('only "Morgana" may respond')
     expect(system).toContain('must respond directly and naturally to the latest assistant reply')
     expect(system).toContain(NARRATOR_INSTRUCTION)
     // History reconstructs the {Name} wire prefix from character_id.
     expect(built.messages[2]!.content).toBe('{Lirael} I heard something below.')
     expect(built.messages).toMatchSnapshot()
+  })
+
+  it('an extra turns labels on in a single-character scene', () => {
+    const built = buildPrompt({
+      ...base,
+      history: [
+        msg('user', 'Where to?'),
+        msg('character', 'Anywhere but here.'),
+        msg('extra', '"Downtown it is."', { speakerName: 'Taxi driver' })
+      ]
+    })
+    const system = built.messages[0]!.content
+    // One character, but two voices: the turns have to say whose they are.
+    expect(system).toContain(LABELLED_TURN_RULES)
+    expect(system).toContain(extrasRule(['Taxi driver']))
+    expect(built.messages[2]!.content).toBe('{Lirael} Anywhere but here.')
+    expect(built.messages[3]!.content).toBe('{Taxi driver} "Downtown it is."')
+    expect(built.messages).toMatchSnapshot()
+  })
+
+  it('forgets an extra that has fallen out of the history window', () => {
+    const built = buildPrompt({
+      ...base,
+      historyLimit: 2,
+      history: [
+        msg('extra', '"Mind the step."', { speakerName: 'Doorman' }),
+        msg('user', 'Thanks.'),
+        msg('character', 'Come on.')
+      ]
+    })
+    const system = built.messages[0]!.content
+    expect(system).not.toContain('Doorman')
+    expect(system).not.toContain(LABELLED_TURN_RULES)
   })
 
   it('interview mode swaps the mode instruction', () => {

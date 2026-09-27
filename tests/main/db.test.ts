@@ -78,7 +78,7 @@ describe('database schema', () => {
     ).run(ts, ts)
 
     migrate(db)
-    expect(db.pragma('user_version', { simple: true })).toBe(3)
+    expect(db.pragma('user_version', { simple: true })).toBe(4)
 
     // A premise that was not already the title survives as the opening context.
     const scenes = db.prepare('SELECT title, previously_on FROM scenes ORDER BY id').all() as {
@@ -152,7 +152,7 @@ describe('database schema', () => {
     ).run(ts, ts)
 
     migrate(db)
-    expect(db.pragma('user_version', { simple: true })).toBe(3)
+    expect(db.pragma('user_version', { simple: true })).toBe(4)
 
     // One row per entity, holding the active publication's content.
     const world = db.prepare("SELECT * FROM worlds WHERE hub_id = 'w1'").all() as any[]
@@ -181,6 +181,65 @@ describe('database schema', () => {
       character[0].id
     )
     expect((db.prepare('SELECT world_id FROM world_notes').get() as any).world_id).toBe(world[0].id)
+
+    db.close()
+  })
+
+  it('makes room for extras without disturbing the turns already written', async () => {
+    const { default: Database } = await import('better-sqlite3')
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const read = (name: string): string =>
+      readFileSync(
+        fileURLToPath(new URL(`../../src/main/db/migrations/${name}`, import.meta.url)),
+        'utf8'
+      )
+
+    const db = new Database(':memory:')
+    db.exec(read('001_init.sql'))
+    db.exec(read('002_scenes_and_memory_proposals.sql'))
+    db.exec(read('003_hub_entity_identity.sql'))
+    db.pragma('user_version = 3')
+
+    const ts = '2026-01-01T00:00:00.000Z'
+    db.prepare("INSERT INTO worlds (name, created_at, updated_at) VALUES ('Eden', ?, ?)").run(ts, ts)
+    db.prepare(
+      "INSERT INTO characters (world_id, name, created_at, updated_at) VALUES (1, 'Lirael', ?, ?)"
+    ).run(ts, ts)
+    db.prepare(
+      "INSERT INTO scenes (world_id, title, created_at, updated_at) VALUES (1, 'The rooftop', ?, ?)"
+    ).run(ts, ts)
+    db.prepare(
+      `INSERT INTO messages (scene_id, role, character_id, content, emotion, created_at)
+       VALUES (1, 'user', NULL, 'Hello?', '', ?), (1, 'character', 1, 'Hello.', 'sad', ?)`
+    ).run(ts, ts)
+
+    migrate(db)
+    expect(db.pragma('user_version', { simple: true })).toBe(4)
+
+    // The table was rebuilt, so what it held has to come through untouched —
+    // ids included, because the scene's turns are ordered by them.
+    const rows = db.prepare('SELECT * FROM messages ORDER BY id').all() as any[]
+    expect(rows.map((r) => [r.id, r.role, r.character_id, r.content, r.emotion])).toEqual([
+      [1, 'user', null, 'Hello?', ''],
+      [2, 'character', 1, 'Hello.', 'sad']
+    ])
+    expect(rows.every((r) => r.speaker_name === '')).toBe(true)
+
+    // And the new role is admitted, with a name of its own.
+    db.prepare(
+      `INSERT INTO messages (scene_id, role, speaker_name, content, created_at)
+       VALUES (1, 'extra', 'Taxi driver', '"Where to?"', ?)`
+    ).run(ts)
+    expect(
+      (db.prepare("SELECT speaker_name FROM messages WHERE role = 'extra'").get() as any)
+        .speaker_name
+    ).toBe('Taxi driver')
+
+    // The scene still cascades through the rebuilt table.
+    db.pragma('foreign_keys = ON')
+    db.prepare('DELETE FROM worlds').run()
+    expect(db.prepare('SELECT COUNT(*) c FROM messages').get()).toEqual({ c: 0 })
 
     db.close()
   })

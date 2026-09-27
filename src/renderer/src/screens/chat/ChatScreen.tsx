@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import type { Responder } from '@shared/ipc'
 import type { Character, Message } from '@shared/types'
 import { parseSpeakerPrefix, stripWirePrefixes } from '@shared/wireFormat'
 import { nextInSeries } from '@shared/titleSeries'
@@ -78,7 +79,6 @@ export default function ChatScreen(): React.JSX.Element {
         .filter((c): c is Character => !!c),
     [scene, charactersQuery.data]
   )
-  const multi = cast.length > 1
   const castNames = useMemo(() => cast.map((c) => c.name), [cast])
   const retiredCast = useMemo(() => cast.filter((c) => c.retiredAt), [cast])
   const persona = scene?.personaId
@@ -86,8 +86,12 @@ export default function ChatScreen(): React.JSX.Element {
     : undefined
 
   const [draft, setDraft] = useState('')
+  // The standing selection is a cast member and only ever a cast member: you
+  // want the driver to chime in once, not to answer everything from here on.
+  // Extras are a direct action, never a standing responder.
   const [responderId, setResponderId] = useState<number | null>(null)
   const responder = cast.find((c) => c.id === responderId) ?? cast[0]
+  const [extraHint, setExtraHint] = useState('')
   const [castOpen, setCastOpen] = useState(false)
   const closeCast = useCallback(() => setCastOpen(false), [])
 
@@ -149,22 +153,54 @@ export default function ChatScreen(): React.JSX.Element {
   const historyLimit = Math.max(1, Number(settingsQuery.data?.historyLimit ?? 30) || 30)
   const sent = Math.min(messages.length, historyLimit)
 
-  // Live speaker detection: flips the header as soon as {Name} streams in.
+  /** True while the turn on screen was asked of an extra rather than the cast. */
+  const streamingExtra =
+    stream.started?.kind === 'reply' && stream.started.responder?.kind === 'extra'
+
+  // Live speaker detection: flips the header as soon as {Name} streams in. An
+  // extra's name is one the app has never seen, so its tag is read unrestricted
+  // — matching it against the cast would put the character's name over the
+  // driver's line.
   const liveSpeaker = useMemo(() => {
     if (stream.streamText === null) return null
+    if (streamingExtra) {
+      const named = parseSpeakerPrefix(stream.streamText)
+      return named?.name ?? (extraHint.trim() || 'Someone')
+    }
     const parsed = parseSpeakerPrefix(stream.streamText, castNames)
     return parsed?.name ?? responder?.name ?? null
-  }, [stream.streamText, castNames, responder])
+  }, [stream.streamText, streamingExtra, extraHint, castNames, responder])
+
+  /**
+   * The extras this scene still has within earshot. Derived from the window the
+   * model is actually sent: an extra who has not spoken in that long is not in
+   * the room any more, and the scene has moved on without them.
+   */
+  const knownExtras = useMemo(() => {
+    const window = messages.slice(-historyLimit)
+    const names = window
+      .filter((m) => m.role === 'extra' && m.speakerName)
+      .map((m) => m.speakerName)
+    return [...new Set(names.reverse())]
+  }, [messages, historyLimit])
 
   // The character whose portrait is on stage, and the emotion driving the sprite.
+  // An extra never takes the stage — they have no art — so the character who
+  // last spoke keeps it, ghosted while someone else is talking over them.
   const lastCharacterMessage = useMemo(
     () => [...messages].reverse().find((m) => m.role === 'character'),
     [messages]
   )
+  const lastVisibleTurn = useMemo(
+    () => [...messages].reverse().find((m) => m.role === 'character' || m.role === 'extra'),
+    [messages]
+  )
   const liveEmotion =
-    stream.streamText !== null ? stripWirePrefixes(stream.streamText, castNames).emotion : ''
+    stream.streamText !== null && !streamingExtra
+      ? stripWirePrefixes(stream.streamText, castNames).emotion
+      : ''
   const displayCharacter =
-    (liveSpeaker && cast.find((c) => c.name === liveSpeaker)) ||
+    (!streamingExtra && liveSpeaker && cast.find((c) => c.name === liveSpeaker)) ||
     cast.find((c) => c.id === lastCharacterMessage?.characterId) ||
     responder
   const spritesQuery = useIpcQuery('sprites:list', displayCharacter?.id ?? -1)
@@ -182,26 +218,38 @@ export default function ChatScreen(): React.JSX.Element {
     if (message.role === 'user') return persona?.name ?? 'You'
     if (message.role === 'system-note') return ''
     if (message.role === 'narrator') return 'Narrator'
+    if (message.role === 'extra') return message.speakerName || 'Someone'
     const character = cast.find((c) => c.id === message.characterId)
     return character?.name ?? cast[0]?.name ?? 'Character'
   }
+
+  /** The standing cast responder, in the shape the turn is asked in. */
+  const castResponder: Responder | undefined = responder
+    ? { kind: 'character', characterId: responder.id }
+    : undefined
 
   async function send(): Promise<void> {
     const text = draft.trim()
     if (!text || !canGenerate) return
     setDraft('')
-    await stream.start({ kind: 'reply', sceneId, userMessage: text, responderId: responder?.id })
+    await stream.start({ kind: 'reply', sceneId, userMessage: text, responder: castResponder })
     refreshMessages()
   }
 
   async function regenerate(): Promise<void> {
     if (!canGenerate || messages.length === 0) return
     const last = messages[messages.length - 1]!
+    // An extra's turn is regenerated as that same extra. Asking the cast to
+    // take it over would quietly replace the driver with Daniela.
+    const again: Responder | undefined =
+      last.role === 'extra'
+        ? { kind: 'extra', name: last.speakerName, leadId: responder?.id }
+        : castResponder
     if (last.role !== 'user') {
       await call('messages:delete', last.id)
       refreshMessages()
     }
-    await stream.start({ kind: 'reply', sceneId, responderId: responder?.id })
+    await stream.start({ kind: 'reply', sceneId, responder: again })
   }
 
   async function impersonate(): Promise<void> {
@@ -227,14 +275,29 @@ export default function ChatScreen(): React.JSX.Element {
     close: () => void
   }): React.JSX.Element {
     const [text, setText] = useState(message.content)
-    const continuable = message.role === 'character' || message.role === 'narrator'
+    const [name, setName] = useState(message.speakerName)
+    const isExtra = message.role === 'extra'
+    const continuable =
+      message.role === 'character' || message.role === 'narrator' || message.role === 'extra'
     return (
       <div className="block">
         <Field label="Message" value={text} onChange={setText} lines={8} autoFocus />
+        {isExtra ? (
+          <>
+            <Field label="Who is speaking" value={name} onChange={setName} />
+            <p className="caption">
+              Renames them everywhere in this scene, so a voice the model called two things
+              becomes one person again.
+            </p>
+          </>
+        ) : null}
         <div className="overlay-actions">
           <TextAction
             onClick={async () => {
               await call('messages:update', message.id, text)
+              if (isExtra && name.trim() && name.trim() !== message.speakerName) {
+                await call('messages:renameExtra', sceneId, message.speakerName, name.trim())
+              }
               refreshMessages()
               close()
             }}
@@ -499,9 +562,31 @@ export default function ChatScreen(): React.JSX.Element {
     await stream.start({
       kind: 'reply',
       sceneId,
-      responderId: responder?.id,
+      responder: castResponder,
       respondToLatest: true
     })
+  }
+
+  /**
+   * Someone the scene put within earshot takes this turn. Whatever is in the
+   * composer goes with it, so "take me downtown" is answered by the driver
+   * rather than by the character sitting beside you while the driver arrives a
+   * turn late.
+   */
+  async function extraAnswers(name: string): Promise<void> {
+    if (!canGenerate) return
+    const text = draft.trim()
+    setCastOpen(false)
+    if (text) setDraft('')
+    setExtraHint('')
+    await stream.start({
+      kind: 'reply',
+      sceneId,
+      userMessage: text || undefined,
+      responder: { kind: 'extra', name, leadId: responder?.id },
+      respondToLatest: !text
+    })
+    refreshMessages()
   }
 
   /**
@@ -618,25 +703,27 @@ export default function ChatScreen(): React.JSX.Element {
   const backdropArt = world?.sessionBackgroundPath || world?.coverImagePath
 
   const streamDisplay =
-    stream.streamText !== null ? stripWirePrefixes(stream.streamText, castNames).content : null
+    stream.streamText !== null
+      ? stripWirePrefixes(stream.streamText, streamingExtra ? undefined : castNames).content
+      : null
 
   return (
     <Screen
       layout="conversation"
       back={{ label: world?.name ?? 'World', to: `/world/${scene.worldId}/sessions` }}
       rightActions={
-        multi ? (
-          <TextAction
-            kind="secondary"
-            onClick={() => setCastOpen((open) => !open)}
-            title="Who answers next, and who can answer now"
-          >
-            Next: {responder?.name ?? 'nobody'}
-          </TextAction>
-        ) : null
+        // Every scene has more than one possible voice now, so the rail is no
+        // longer gated on the cast having a second character in it.
+        <TextAction
+          kind="secondary"
+          onClick={() => setCastOpen((open) => !open)}
+          title="Who answers next, and who can answer now"
+        >
+          Next: {responder?.name ?? 'nobody'}
+        </TextAction>
       }
       rail={
-        multi && castOpen ? (
+        castOpen ? (
           <ResponderDrawer
             cast={cast}
             responder={responder}
@@ -644,6 +731,11 @@ export default function ChatScreen(): React.JSX.Element {
             onAnswerNow={answerNow}
             canGenerate={canGenerate}
             repliesTo={lastCharacterMessage ? speakerFor(lastCharacterMessage) : null}
+            knownExtras={knownExtras}
+            extraHint={extraHint}
+            setExtraHint={setExtraHint}
+            onExtraAnswers={extraAnswers}
+            hasDraft={draft.trim().length > 0}
             onClose={closeCast}
           />
         ) : null
@@ -721,9 +813,13 @@ export default function ChatScreen(): React.JSX.Element {
               gap: 6
             }}
           >
+            {/* While an extra holds the floor the character is still on stage
+                but is not the one talking, so the art itself is dimmed. Their
+                name stands at full strength in the transcript. */}
             <Art
               path={stagePortrait}
               treatment="alpha"
+              ghost={streamingExtra || lastVisibleTurn?.role === 'extra'}
               style={{
                 width: '100%',
                 maxHeight: displayMode === 'vn' ? 'min(520px, 100%)' : 'min(380px, 100%)',
@@ -807,6 +903,11 @@ export default function ChatScreen(): React.JSX.Element {
  * amber action makes that character answer the transcript right now. It sits
  * beside the conversation rather than over it, because choosing who speaks
  * next means reading what was just said.
+ *
+ * The extras are one step further in, behind a single action in the rail's
+ * head: they are occasional, and the cast is what the rail is for. They
+ * are never a standing selection, only a direct action — an extra is someone
+ * who says a line, not someone who takes over answering you.
  */
 function ResponderDrawer({
   cast,
@@ -815,6 +916,11 @@ function ResponderDrawer({
   onAnswerNow,
   canGenerate,
   repliesTo,
+  knownExtras,
+  extraHint,
+  setExtraHint,
+  onExtraAnswers,
+  hasDraft,
   onClose
 }: {
   cast: Character[]
@@ -824,24 +930,66 @@ function ResponderDrawer({
   canGenerate: boolean
   /** Whose turn a direct reply would answer, if anyone has spoken yet. */
   repliesTo: string | null
+  /** Extras still within earshot — those who have spoken inside the window. */
+  knownExtras: string[]
+  extraHint: string
+  setExtraHint: (v: string) => void
+  onExtraAnswers: (name: string) => void
+  /** Whether the composer has something waiting to be sent with the turn. */
+  hasDraft: boolean
   onClose: () => void
 }): React.JSX.Element {
+  // Held here, not by the screen, so hiding the rail and opening it again
+  // always comes back to the cast.
+  const [extrasOpen, setExtrasOpen] = useState(false)
+
   // Bubble phase, so an overlay opened over the rail still takes Escape first.
+  // Like overlays, the drawer on top closes first.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      if (extrasOpen) setExtrasOpen(false)
+      else onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, extrasOpen])
+
+  if (extrasOpen) {
+    return (
+      <ExtrasDrawer
+        knownExtras={knownExtras}
+        extraHint={extraHint}
+        setExtraHint={setExtraHint}
+        onExtraAnswers={onExtraAnswers}
+        canGenerate={canGenerate}
+        hasDraft={hasDraft}
+        onBack={() => setExtrasOpen(false)}
+      />
+    )
+  }
 
   return (
     <>
       <div className="rail-head">
         <Eyebrow>Cast</Eyebrow>
-        <TextAction kind="secondary" onClick={onClose}>
-          Hide →
-        </TextAction>
+        {/* In the head, where it costs the cast no height at all. */}
+        <span className="rail-head-actions">
+          <TextAction
+            kind="secondary"
+            onClick={() => setExtrasOpen(true)}
+            title={
+              knownExtras.length
+                ? `${knownExtras.join(', ')} ${knownExtras.length === 1 ? 'is' : 'are'} still within earshot`
+                : 'Someone the scene put within earshot answers once'
+            }
+          >
+            Extras →
+          </TextAction>
+          <TextAction kind="secondary" onClick={onClose}>
+            Hide →
+          </TextAction>
+        </span>
       </div>
 
       <div className="block" style={{ gap: 'var(--space-2)' }}>
@@ -912,6 +1060,93 @@ function ResponderDrawer({
         </p>
       </div>
     </>
+  )
+}
+
+/**
+ * The extras, in a drawer laid over the cast rather than beside it: the
+ * conversation stays readable, since who plausibly speaks up depends on what
+ * was just said, and the cast underneath is one step back.
+ */
+function ExtrasDrawer({
+  knownExtras,
+  extraHint,
+  setExtraHint,
+  onExtraAnswers,
+  canGenerate,
+  hasDraft,
+  onBack
+}: {
+  /** Extras still within earshot — those who have spoken inside the window. */
+  knownExtras: string[]
+  extraHint: string
+  setExtraHint: (v: string) => void
+  onExtraAnswers: (name: string) => void
+  canGenerate: boolean
+  /** Whether the composer has something waiting to be sent with the turn. */
+  hasDraft: boolean
+  onBack: () => void
+}): React.JSX.Element {
+  return (
+    <div className="rail-layer">
+      <div className="rail-head">
+        <Eyebrow>Extras</Eyebrow>
+        <TextAction kind="secondary" onClick={onBack}>
+          ← Cast
+        </TextAction>
+      </div>
+
+      <div className="block" style={{ gap: 'var(--space-2)' }}>
+        <h2 className="display" style={{ fontSize: 'var(--size-display-m)' }}>
+          Someone else speaks up.
+        </h2>
+        <p className="caption">
+          Nobody here is written down — the scene is read and someone plausible answers.
+        </p>
+      </div>
+
+      <div className="block" style={{ gap: 'var(--space-3)' }}>
+        <Field
+          label="Who speaks — optional"
+          value={extraHint}
+          onChange={setExtraHint}
+          placeholder="the driver"
+          autoFocus
+        />
+        <TextAction
+          onClick={() => onExtraAnswers(extraHint)}
+          disabled={!canGenerate}
+          sub={
+            hasDraft
+              ? 'Sends what you have typed, then answers it as whoever is most likely to.'
+              : 'Reads the scene and improvises whoever it has put within earshot.'
+          }
+        >
+          Let someone else answer now →
+        </TextAction>
+      </div>
+
+      {knownExtras.length ? (
+        <div className="block" style={{ gap: 'var(--space-3)' }}>
+          <Rule end={64} />
+          <Eyebrow>Still within earshot</Eyebrow>
+          {knownExtras.map((name) => (
+            <TextAction
+              key={name}
+              kind="secondary"
+              onClick={() => onExtraAnswers(name)}
+              disabled={!canGenerate}
+            >
+              Let {name.toLowerCase()} answer now →
+            </TextAction>
+          ))}
+        </div>
+      ) : null}
+
+      <p className="caption" style={{ color: 'var(--faint)' }}>
+        Escape returns to the cast.
+      </p>
+    </div>
   )
 }
 

@@ -49,10 +49,54 @@ afterEach(() => cleanup())
 
 describe('build', () => {
   it('appends a turn-control user message for respond-to-latest', () => {
-    const result = chat.build(sceneId, { responderId: morganaId, respondToLatest: true })
+    const result = chat.build(sceneId, {
+      responder: { kind: 'character', characterId: morganaId },
+      respondToLatest: true
+    })
     const last = result.built.messages.at(-1)!
     expect(last.role).toBe('user')
     expect(last.content).toContain('[Turn control: Morgana now responds directly')
+  })
+
+  it('asks for an extra from the end of the prompt, leaving the system section alone', () => {
+    const plain = chat.build(sceneId)
+    const asExtra = chat.build(sceneId, { responder: { kind: 'extra', name: 'the driver' } })
+    // The whole point: choosing a passer-by must not move token zero, or a
+    // local server reprocesses the entire context to hear one line.
+    expect(asExtra.built.messages[0]!.content).toBe(plain.built.messages[0]!.content)
+    const last = asExtra.built.messages.at(-1)!
+    expect(last.role).toBe('user')
+    expect(last.content).toContain('not in the cast')
+    expect(last.content).toContain('[The scene calls on: the driver.]')
+    expect(asExtra.responder).toEqual({ kind: 'extra', name: 'the driver' })
+    expect(asExtra.lead.id).toBe(liraelId)
+  })
+
+  it('keeps the prompt written around the standing responder while an extra speaks', () => {
+    const asKaguya = chat.build(sceneId, {
+      responder: { kind: 'character', characterId: morganaId }
+    })
+    const asExtra = chat.build(sceneId, {
+      responder: { kind: 'extra', name: 'the barman', leadId: morganaId }
+    })
+    // Sending a message and then asking a passer-by to chime in must not
+    // reprocess the whole context, so token zero has to survive the switch.
+    expect(asExtra.built.messages[0]!.content).toBe(asKaguya.built.messages[0]!.content)
+    expect(asExtra.built.messages[0]!.content).toContain('only "Morgana" may respond')
+    expect(asExtra.lead.id).toBe(morganaId)
+  })
+
+  it('offers the extras still in the window back to the model', () => {
+    messagesRepo.addMessage({
+      sceneId,
+      role: 'extra',
+      speakerName: 'Taxi driver',
+      content: '"Where to?"'
+    })
+    const result = chat.build(sceneId, { responder: { kind: 'extra' } })
+    expect(result.built.messages.at(-1)!.content).toContain('{Taxi driver}')
+    // And the transcript now labels every voice, single cast or not.
+    expect(result.built.messages[1]!.content).toBe('{Taxi driver} "Where to?"')
   })
 
   it('truncates history at beforeMessageId for continuations', () => {
@@ -73,7 +117,9 @@ describe('saveReply', () => {
       callSign: 'sad',
       imagePath: 'x.png'
     })
-    const buildResult = chat.build(sceneId, { responderId: morganaId })
+    const buildResult = chat.build(sceneId, {
+      responder: { kind: 'character', characterId: morganaId }
+    })
     const saved = chat.saveReply(sceneId, '{Morgana} [sad] "Not really."', buildResult)
     expect(saved.characterId).toBe(morganaId)
     expect(saved.emotion).toBe('sad')
@@ -85,10 +131,49 @@ describe('saveReply', () => {
   })
 
   it('attributes an unlabeled reply to the responder', () => {
-    const buildResult = chat.build(sceneId, { responderId: liraelId })
+    const buildResult = chat.build(sceneId, {
+      responder: { kind: 'character', characterId: liraelId }
+    })
     const saved = chat.saveReply(sceneId, 'Just words.', buildResult)
     expect(saved.characterId).toBe(liraelId)
     expect(saved.content).toBe('Just words.')
+  })
+})
+
+describe('saveReply for an extra', () => {
+  const asExtra = (name = ''): chat.BuildResult =>
+    chat.build(sceneId, { responder: { kind: 'extra', name } })
+
+  it('keeps a name the app has never seen', () => {
+    const saved = chat.saveReply(sceneId, '{Taxi driver} "Where to, then?"', asExtra())
+    expect(saved.characterId).toBeNull()
+    expect(saved.speakerName).toBe('Taxi driver')
+    expect(saved.content).toBe('"Where to, then?"')
+    const stored = messagesRepo.getMessage(saved.messageId)!
+    expect(stored.role).toBe('extra')
+    expect(stored.speakerName).toBe('Taxi driver')
+  })
+
+  it('strips a sprite tag it has no sprites for', () => {
+    const saved = chat.saveReply(sceneId, '{Barman} [wry] "We close at two."', asExtra())
+    expect(saved.emotion).toBe('')
+    expect(saved.content).toBe('"We close at two."')
+  })
+
+  it('falls back to the hint, then to a plain label, when no name arrives', () => {
+    expect(chat.saveReply(sceneId, 'Mind the step.', asExtra('the doorman')).speakerName).toBe(
+      'the doorman'
+    )
+    expect(chat.saveReply(sceneId, 'Mind the step.', asExtra()).speakerName).toBe(
+      chat.UNNAMED_EXTRA
+    )
+  })
+
+  it('takes the model at its word when it answered as a cast member instead', () => {
+    const saved = chat.saveReply(sceneId, '{Morgana} "I will handle this."', asExtra())
+    expect(saved.characterId).toBe(morganaId)
+    expect(saved.speakerName).toBe('')
+    expect(messagesRepo.getMessage(saved.messageId)!.role).toBe('character')
   })
 })
 
@@ -211,6 +296,21 @@ describe('exportScene', () => {
     expect(text).toContain('**Morgana:** "You found me."')
     expect(text).toContain('**Narrator:** *Wind rises.*')
     expect(text).not.toContain('deleted')
+  })
+
+  it('credits an extra with their own line', async () => {
+    const { readFileSync } = await import('node:fs')
+    messagesRepo.addMessage({
+      sceneId,
+      role: 'extra',
+      speakerName: 'Taxi driver',
+      content: '"Where to, then?"'
+    })
+    messagesRepo.addMessage({ sceneId, role: 'extra', content: '"Mind the step."' })
+
+    const text = readFileSync(chat.exportScene(sceneId), 'utf8')
+    expect(text).toContain('**Taxi driver:** "Where to, then?"')
+    expect(text).toContain(`**${chat.UNNAMED_EXTRA}:** "Mind the step."`)
   })
 })
 

@@ -36,6 +36,13 @@ describe('parseSpeakerPrefix', () => {
   it('returns the raw name without a cast list', () => {
     expect(parseSpeakerPrefix('{Someone} hi')).toEqual({ name: 'Someone', rest: 'hi' })
   })
+
+  it('keeps an extra’s multi-word label, which no cast list could vouch for', () => {
+    expect(parseSpeakerPrefix('{Taxi driver} "Where to, then?"')).toEqual({
+      name: 'Taxi driver',
+      rest: '"Where to, then?"'
+    })
+  })
 })
 
 describe('stripWirePrefixes', () => {

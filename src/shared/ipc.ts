@@ -28,13 +28,33 @@ import type {
   WorldNoteDraft
 } from './types'
 
+/**
+ * Who a turn is asked of. A scene has a cast, and it has extras: people it has
+ * put within earshot who have no profile — a driver, a barman, whoever is close
+ * enough to speak. An extra with no name lets the model work out who that is
+ * from the scene itself.
+ */
+export type Responder =
+  | { kind: 'character'; characterId: number }
+  | {
+      kind: 'extra'
+      name?: string
+      /**
+       * The cast member the scene is standing on — whoever would have answered
+       * a normal turn. The prompt stays written around them so that calling on
+       * a passer-by does not move token zero and cost the whole context a
+       * reprocess; the extra is asked for at the end of the prompt instead.
+       */
+      leadId?: number
+    }
+
 export type ChatStartParams =
   | {
       kind: 'reply'
       sceneId: number
       /** Persisted as the user's turn before generating, when non-empty. */
       userMessage?: string
-      responderId?: number | null
+      responder?: Responder
       respondToLatest?: boolean
     }
   | { kind: 'continuation'; sceneId: number; messageId: number; partial: string }
@@ -116,6 +136,8 @@ export interface IpcMethods {
   'messages:count': (sceneId: number) => number
   'messages:update': (id: number, content: string) => void
   'messages:delete': (id: number) => void
+  /** Renames an extra across the whole scene, so a drifting label can be fixed once. */
+  'messages:renameExtra': (sceneId: number, from: string, to: string) => void
 
   'templates:list': (worldId: number) => SceneTemplate[]
   'templates:save': (draft: SceneTemplateDraft) => number

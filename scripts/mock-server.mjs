@@ -3,9 +3,10 @@
 // Run with:  node scripts/mock-server.mjs [port]
 // Then set the base URL in Settings to http://localhost:8111/v1
 //
-// It inspects the system prompt to imitate real behavior:
+// It inspects the prompt to imitate real behavior:
 // - custom sprite instruction -> reply starts with one of its configured call signs
-// - multi-character rules     -> reply uses '{Name} "dialogue"' blocks
+// - labelled-turn rules       -> reply uses '{Name} "dialogue"' blocks
+// - extra turn request        -> reply comes from someone who is not in the cast
 // - summary request           -> returns a short summary
 // - memory suggestions        -> returns a bullet list of facts
 
@@ -58,11 +59,26 @@ function memoryActions(system) {
 
 const MULTI_LINES = ['"I heard something down there."', '"Then we go together."', '"Fine. But quietly."']
 
+/**
+ * The extra's turn is steered from the end of the prompt, not from the system
+ * section, so this reads the last user turn. It reuses an extra the scene
+ * already has when the instruction lists one, the way a real model is asked to.
+ */
+function extraReply(closing) {
+  const known = closing.match(/Extras already in this scene: \{([^}]+)\}/)?.[1]
+  const hint = closing.match(/\[The scene calls on: (.+?)\.\]/)?.[1]
+  const name = known ?? (hint ? hint.replace(/^the /i, '') : 'Taxi driver')
+  const label = name.charAt(0).toUpperCase() + name.slice(1)
+  return `{${label}} "Where to, then?" *They glance back through the mirror, unbothered.*`
+}
+
 function composeReply(payload) {
   let system = ''
   for (const m of payload.messages ?? []) {
     if (m.role === 'system') system += m.content ?? ''
   }
+  const closing = payload.messages?.at(-1)?.content ?? ''
+  if (closing.includes('the reply comes from an extra')) return extraReply(closing)
   if (system.includes('Summarize the scene transcript')) return SUMMARY
   if (system.includes('maintaining the long-term memory')) return memoryActions(system)
   if (system.includes('helping the user roleplay as their persona')) {
@@ -80,7 +96,7 @@ function composeReply(payload) {
     )
   }
   let reply = REPLY
-  if (system.includes('Multiple characters are present')) {
+  if (system.includes('More than one voice can speak')) {
     const names = [...system.matchAll(/Character profile: (\w+)/g)].map((m) => m[1])
     const cast = names.length ? names.slice(0, 3) : ['Ana', 'Bea']
     const parts = cast.map((n, i) => `{${n}} ${MULTI_LINES[i % MULTI_LINES.length]}`)

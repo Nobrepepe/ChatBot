@@ -37,13 +37,32 @@ export const MODE_INSTRUCTIONS: Record<SceneMode, string> = {
     'referencing the profile, memories, and scene context provided.'
 }
 
-export const MULTI_CHARACTER_RULES =
-  'Multiple characters are present in this scene. Rules:\n' +
+/**
+ * More than one voice can speak, so every turn says whose it is. That is true
+ * of a scene with several characters and equally true of a scene with one
+ * character and an extra, so the rules are written for voices rather than for
+ * profiles.
+ */
+export const LABELLED_TURN_RULES =
+  'More than one voice can speak in this scene. Rules:\n' +
   '- Only speak for the listed characters, never for the user.\n' +
-  '- Exactly one character responds per assistant turn.\n' +
-  "- Begin with that character's name in curly brackets, e.g. '{Daniela}'.\n" +
+  '- Exactly one voice responds per assistant turn.\n' +
+  "- Begin with that voice's name in curly brackets, e.g. '{Daniela}'.\n" +
   "- Keep each character's voice distinct, following their profiles.\n" +
-  '- When a next responder is explicitly selected, only that character responds.'
+  '- When a next responder is explicitly selected, only that voice responds.'
+
+/**
+ * Named once the scene has actually produced an extra, so the transcript the
+ * model is reading stops containing labels the rules above say cannot exist.
+ */
+export function extrasRule(names: string[]): string {
+  return (
+    'The scene also has extras: people it has put within earshot who have no ' +
+    `profile. So far: ${names.map((n) => `"${n}"`).join(', ')}. Their turns are ` +
+    'labelled the same way. Do not write an extra unless a turn explicitly ' +
+    'asks for one.'
+  )
+}
 
 export const NARRATOR_INSTRUCTION =
   'You may also act as a scene narrator: between pieces of dialogue, write ' +
@@ -234,6 +253,15 @@ export interface BuildPromptInput {
   emotionTags?: boolean
   /** bare call sign -> sprite name, for the active responder */
   sprites?: Record<string, string> | null
+  /**
+   * The cast member the prompt is written around. Deliberately a Character and
+   * never an extra: asking for an extra must not touch the system section, or
+   * a local server loses its prefix cache and reprocesses the whole context
+   * every time the scene calls on someone. Extras are steered entirely by the
+   * trailing turn-control message the caller appends. The one thing that does
+   * change this section is an extra already standing in the history — a
+   * property of the scene, not of this turn, so it settles once and stays.
+   */
   responder?: Character | null
   respondToLatest?: boolean
   systemPrompt?: string
@@ -263,6 +291,23 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
   const multi = characters.length > 1
   const mode: SceneMode = scene.mode in MODE_INSTRUCTIONS ? scene.mode : 'roleplay'
 
+  const visible = history.filter((m) => !m.deletedAt && m.role !== 'system-note')
+  const truncated = visible.length > historyLimit
+  const window = truncated ? visible.slice(-historyLimit) : visible
+
+  // The extras the model can still see. Derived from the window rather than the
+  // whole scene: an extra who has fallen out of the history is not in the room
+  // any more, and naming them would invite the model to bring them back.
+  const extraNames = [
+    ...new Set(
+      window.filter((m) => m.role === 'extra' && m.speakerName).map((m) => m.speakerName)
+    )
+  ]
+
+  // Turns carry a name whenever more than one voice can speak — several
+  // characters, or one character and an extra.
+  const labelTurns = multi || extraNames.length > 0
+
   if (systemPrompt.trim()) {
     sections.push({ label: 'Custom system prompt', content: systemPrompt.trim() })
   }
@@ -272,9 +317,10 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
     `You are playing the character${multi ? 's' : ''} ${names} in the ` +
       `world "${world.name}".\n${MODE_INSTRUCTIONS[mode]}`
   ]
-  if (multi) {
-    coreParts.push(MULTI_CHARACTER_RULES)
-    if (responder) {
+  if (labelTurns) {
+    coreParts.push(LABELLED_TURN_RULES)
+    if (extraNames.length) coreParts.push(extrasRule(extraNames))
+    if (multi && responder) {
       coreParts.push(
         `For the next reply, only "${responder.name}" may respond. Begin the ` +
           `reply with {${responder.name}}, followed by the emotion tag.`
@@ -292,7 +338,7 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
     coreParts.push(scene.narratorEnabled ? NARRATOR_INSTRUCTION : NO_NARRATOR_INSTRUCTION)
   }
   if (emotionTags && sprites && Object.keys(sprites).length && mode !== 'author') {
-    coreParts.push(spriteInstruction(sprites, multi && responder ? responder.name : ''))
+    coreParts.push(spriteInstruction(sprites, labelTurns && responder ? responder.name : ''))
   }
   sections.push({ label: 'System instructions', content: coreParts.join('\n\n') })
 
@@ -322,10 +368,6 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
 
   sections.push({ label: 'Scene', content: buildSceneSection(scene) })
 
-  const visible = history.filter((m) => !m.deletedAt && m.role !== 'system-note')
-  const truncated = visible.length > historyLimit
-  const window = truncated ? visible.slice(-historyLimit) : visible
-
   if (truncated && scene.summary.trim()) {
     sections.push({ label: 'Earlier in this scene (summary)', content: scene.summary.trim() })
   }
@@ -340,9 +382,12 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
       // are reconstructed from the structured columns.
       let content = msg.content
       if (emotionTags && msg.emotion) content = `[${msg.emotion}] ${content}`
-      if (multi && msg.role === 'character' && msg.characterId != null) {
+      if (labelTurns && msg.role === 'character' && msg.characterId != null) {
         const name = nameById.get(msg.characterId)
         if (name) content = `{${name}} ${content}`
+      }
+      if (labelTurns && msg.role === 'extra' && msg.speakerName) {
+        content = `{${msg.speakerName}} ${content}`
       }
       messages.push({ role: 'assistant', content })
     }

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Character Chat
+GenericName=Character Chat
+Comment=Chat with your fictional characters, powered by local AI models
+Exec=@EXEC@
+Path=@PROJECT_ROOT@
+Icon=character-chat
+Terminal=false
+Categories=Network;Chat;
+Keywords=chat;character;characters;roleplay;story;writing;llm;ai;
+StartupNotify=true
+StartupWMClass=@WMCLASS@

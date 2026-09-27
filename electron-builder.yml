@@ -12,7 +12,8 @@ linux:
   target:
     - AppImage
   category: Utility
-  desktopName: character-chat.desktop
+  # The same SVG the desktop-entry installer uses; electron-builder rasterises it.
+  icon: packaging/character-chat.svg
   syncDesktopName: true
 win:
   target:

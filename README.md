@@ -68,6 +68,20 @@ npm run dist       # build a packaged app into release/
 only ever needs to be compiled for one ABI. If the native module complains
 after an Electron upgrade, run `npx electron-rebuild -f -o better-sqlite3`.
 
+### Launching from the desktop (Linux)
+
+```bash
+./packaging/install-desktop-entry.sh              # install / refresh
+./packaging/install-desktop-entry.sh --uninstall  # remove
+```
+
+This installs a `Character Chat` application entry and icon for the current
+user, pointing at `packaging/character-chat`. That launcher runs the app from
+this checkout and rebuilds `out/` first whenever the source is newer, so a
+taskbar launch always opens the current code. Build and run output goes to
+`~/.local/share/character-chat/logs/launcher.log`. Re-run the installer after
+moving the project directory.
+
 ## Connecting a local model
 
 Open **Settings** and set the base URL:

@@ -3,6 +3,7 @@
   "version": "2.0.0",
   "description": "A desktop app for chatting with your fictional characters, powered by local AI models.",
   "main": "out/main/index.js",
+  "desktopName": "character-chat.desktop",
   "author": "Nobrepepe",
   "license": "MIT",
   "private": true,

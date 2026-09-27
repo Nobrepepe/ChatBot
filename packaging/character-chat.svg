@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#241d17"/>
+      <stop offset="1" stop-color="#12100f"/>
+    </linearGradient>
+    <!-- user-space so the bubble and its tail share one continuous gradient -->
+    <linearGradient id="brass" gradientUnits="userSpaceOnUse" x1="0" y1="200" x2="0" y2="420">
+      <stop offset="0" stop-color="#f6cd85"/>
+      <stop offset="1" stop-color="#e9a94f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#e9a94f" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#e9a94f" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- plate -->
+  <rect width="512" height="512" rx="112" fill="url(#plate)"/>
+  <rect x="3" y="3" width="506" height="506" rx="110" fill="none"
+        stroke="#f4ece1" stroke-opacity="0.10" stroke-width="6"/>
+
+  <!-- warmth around the voice that answers -->
+  <ellipse cx="300" cy="300" rx="200" ry="160" fill="url(#glow)"/>
+
+  <!-- what you said: quiet, set back -->
+  <g fill="#f4ece1" opacity="0.26">
+    <rect x="88" y="112" width="232" height="148" rx="58"/>
+    <path d="M136 236 Q130 282 96 306 Q156 300 190 252 Z"/>
+  </g>
+
+  <!-- the character answering: the one amber voice, still composing -->
+  <g fill="url(#brass)" stroke="#1c1713" stroke-width="14" paint-order="stroke" stroke-linejoin="round">
+    <path d="M344 350 Q356 398 410 420 Q382 384 392 336 Z"/>
+    <rect x="164" y="196" width="264" height="168" rx="66"/>
+  </g>
+  <path d="M344 350 Q356 398 410 420 Q382 384 392 336 Z" fill="url(#brass)"/>
+  <g fill="#17120f" fill-opacity="0.72">
+    <circle cx="238" cy="280" r="18"/>
+    <circle cx="296" cy="280" r="18"/>
+    <circle cx="354" cy="280" r="18"/>
+  </g>
+</svg>

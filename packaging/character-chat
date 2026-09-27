@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Desktop launcher for Character Chat.
+#
+# Runs the app from the project's own Electron install. The app runs from the
+# compiled bundle in out/, so when anything the bundle is built from is newer
+# than it, the launcher rebuilds first — a launch from the taskbar always opens
+# the current source. The build runs on Electron's bundled Node, so no system
+# node is needed on PATH.
+#
+# stdout/stderr from the build and the run land in a launcher log; the app's
+# own data stays under ~/.config/character-chat.
+
+set -uo pipefail
+
+here="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
+project_root="$(dirname -- "$here")"
+
+log_dir="${XDG_DATA_HOME:-$HOME/.local/share}/character-chat/logs"
+mkdir -p "$log_dir" 2>/dev/null || log_dir=""
+log_file="${log_dir:+$log_dir/launcher.log}"
+log_file="${log_file:-/dev/null}"
+
+fail() {
+    local message="$1"
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "Character Chat" --error "$message"
+    elif command -v zenity >/dev/null 2>&1; then
+        zenity --error --title "Character Chat" --text "$message"
+    elif command -v notify-send >/dev/null 2>&1; then
+        notify-send --app-name="Character Chat" --icon=character-chat "Character Chat" "$message"
+    fi
+    echo -e "character-chat: $message" >&2
+    exit 1
+}
+
+notify() {
+    command -v notify-send >/dev/null 2>&1 &&
+        notify-send --app-name="Character Chat" --icon=character-chat "Character Chat" "$1"
+}
+
+[[ -f "$project_root/package.json" ]] || fail "Project directory is missing: $project_root"
+cd -- "$project_root" || fail "Project directory is missing: $project_root"
+
+electron_bin="$project_root/node_modules/electron/dist/electron"
+[[ -x "$electron_bin" ]] ||
+    fail "Could not find Electron in:\n$project_root/node_modules\n\nInstall the dependencies with:\nnpm install"
+
+# Truncated per launch, so the log describes the session that is running.
+: >"$log_file"
+
+bundle="$project_root/out/main/index.js"
+sources=(src vendor package.json electron.vite.config.ts)
+if [[ ! -f "$bundle" ]] || [[ -n "$(find "${sources[@]}" -newer "$bundle" -print -quit 2>/dev/null)" ]]; then
+    echo "[launcher] source is newer than out/ — rebuilding" >>"$log_file"
+    if ELECTRON_RUN_AS_NODE=1 "$electron_bin" node_modules/electron-vite/bin/electron-vite.js build >>"$log_file" 2>&1; then
+        # A build that leaves the main bundle byte-identical may keep its old
+        # mtime; stamp it so the next launch does not rebuild again.
+        touch "$bundle"
+    elif [[ -f "$bundle" ]]; then
+        notify "The rebuild failed, so the last working build was opened. Details: $log_file"
+    else
+        fail "The app could not be built. Details:\n$log_file"
+    fi
+fi
+
+# --class fixes the window's WM_CLASS so the taskbar matches a running window
+# to this desktop entry instead of showing a second, generic Electron icon.
+exec "$electron_bin" "$project_root" --class=character-chat "$@" >>"$log_file" 2>&1
